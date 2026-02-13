@@ -1,0 +1,18 @@
+{
+  "name": "forwardr-webhook-worker",
+  "version": "1.0.0",
+  "description": "Cloudflare Worker to receive Telegram webhooks",
+  "main": "worker.js",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev"
+  },
+  "keywords": [
+    "cloudflare",
+    "worker",
+    "telegram",
+    "webhook"
+  ],
+  "author": "",
+  "license": "MIT"
+}
