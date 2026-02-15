@@ -74,11 +74,11 @@ async def process_telegram_message_example(telegram_message: dict):
         
         # In production, this would actually download:
         # media_info = await media_handler.download_telegram_media(media_info)
-        # print(f"✓ Downloaded to: {media_info.local_path}")
+        # print(f"Downloaded to: {media_info.local_path}")
         
         # For this example, use local test file
         media_info.local_path = "./test_image.jpg"
-        print(f"✓ Using test file: {media_info.local_path}")
+        print(f"Using test file: {media_info.local_path}")
         print()
         
         # Step 4: Generate platform-specific variants (optional, can be done per-platform)
@@ -91,11 +91,11 @@ async def process_telegram_message_example(telegram_message: dict):
                 platforms=ENABLED_PLATFORMS
             )
             
-            print(f"✓ Generated {len(variants)} platform variants")
+            print(f"Generated {len(variants)} platform variants")
             for platform, info in sorted(variants.items()):
                 print(f"  • {platform}: {info['dimensions'][0]}x{info['dimensions'][1]}, {info['size_mb']} MB")
         else:
-            print("⚠ Test file not found, skipping variant generation")
+            print("WARNING: Test file not found, skipping variant generation")
         print()
     
     # Step 5: Queue posts for enabled platforms
@@ -115,7 +115,7 @@ async def process_telegram_message_example(telegram_message: dict):
             delay_hours = i
             print(f"  • Job #{job_id} → {platform} (in {delay_hours}h)")
     else:
-        print("⚠ No platforms enabled, skipping queue")
+        print("WARNING: No platforms enabled, skipping queue")
     print()
     
     # Step 6: Start background processor (if not already running)
@@ -124,7 +124,7 @@ async def process_telegram_message_example(telegram_message: dict):
     
     # In production, start this once at app startup:
     # queue_manager.start_processor()
-    print("💡 In production, start processor once at app startup:")
+    print("NOTE: In production, start processor once at app startup:")
     print("   queue_manager.start_processor()")
     print()
     
@@ -141,7 +141,7 @@ async def process_telegram_message_example(telegram_message: dict):
     print()
     
     print("=" * 70)
-    print("✓ Integration example completed!")
+    print("Integration example completed!")
     print("=" * 70 + "\n")
 
 
@@ -178,7 +178,7 @@ def webhook_handler_example():
                     "height": 960
                 }
             ],
-            "caption": "Amazing sunset! 🌅 #nature #photography"
+            "caption": "Amazing sunset! #nature #photography"
         }
     }
     
@@ -200,7 +200,7 @@ def cleanup_example():
     
     print("Purging old completed jobs (older than 7 days)...")
     deleted = queue_manager.purge_old_jobs(days=7)
-    print(f"✓ Deleted {deleted} old jobs")
+    print(f"Deleted {deleted} old jobs")
     print()
     
     print("=" * 70 + "\n")
@@ -221,13 +221,13 @@ def monitoring_example():
     print(f"Recent jobs (last {len(jobs)}):\n")
     
     for job in jobs:
-        status_emoji = {
-            'pending': '⏳',
-            'completed': '✅',
-            'failed': '❌'
-        }.get(job['status'], '❓')
+        status_symbol = {
+            'pending': '[PENDING]',
+            'completed': '[DONE]',
+            'failed': '[FAILED]'
+        }.get(job['status'], '[UNKNOWN]')
         
-        print(f"{status_emoji} Job #{job['id']}")
+        print(f"{status_symbol} Job #{job['id']}")
         print(f"   Platform: {job['platform']}")
         print(f"   Status: {job['status']} (attempt {job['attempts']})")
         print(f"   Scheduled: {job['scheduled_time']}")
@@ -262,7 +262,7 @@ def main():
     # Example 3: Monitoring
     monitoring_example()
     
-    print("\n✓ All examples completed!\n")
+    print("\nAll examples completed!\n")
 
 
 if __name__ == "__main__":
