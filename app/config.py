@@ -292,11 +292,11 @@ class Settings:
         for platform_name, platform_config in self._platforms.items():
             if platform_config.is_complete():
                 enabled.append(platform_name)
-                logger.info(f"✓ {platform_name.capitalize()} platform enabled")
+                logger.info(f"{platform_name.capitalize()} platform enabled")
             else:
                 missing = platform_config.get_missing_fields()
                 logger.warning(
-                    f"✗ {platform_name.capitalize()} platform disabled - "
+                    f"{platform_name.capitalize()} platform disabled - "
                     f"missing: {', '.join(missing)}"
                 )
         

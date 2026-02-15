@@ -1,6 +1,6 @@
 # Queue Manager - Feature Summary
 
-## ✅ Implemented Features
+## Implemented Features
 
 ### 1. Database Schema (SQLite)
 ```sql
@@ -81,9 +81,9 @@ Get specific job details
 - Returns count of deleted jobs
 - Should be run periodically (e.g., daily cron job)
 
-## 📊 Test Results
+## Test Results
 
-### Test 1: Basic Queue Processing ✅
+### Test 1: Basic Queue Processing
 ```
 Created: 3 jobs (telegram, twitter, bluesky)
 Schedule: 5 seconds apart
@@ -92,15 +92,15 @@ Cleanup: test_image.jpg deleted automatically
 Time: ~20 seconds total
 ```
 
-### Test 2: Platform Integration ✅
+### Test 2: Platform Integration
 ```
-Config integration: ✓ Works with settings.enabled_platforms
-Media handler: ✓ Integrates with MediaInfo
-Database: ✓ Created with proper schema
-Background processor: ✓ Starts/stops cleanly
+Config integration: Works with settings.enabled_platforms
+Media handler: Integrates with MediaInfo
+Database: Created with proper schema
+Background processor: Starts/stops cleanly
 ```
 
-### Test 3: Retry Logic ✅
+### Test 3: Retry Logic
 ```
 Job #1: Simulated failures (2x) → Success on attempt 3
 Job #2: Success on first attempt
@@ -108,7 +108,7 @@ Retry delay: 30 seconds (configurable)
 Error logging: All attempts tracked
 ```
 
-## 🔄 Workflow Example
+## Workflow Example
 
 1. **Receive Telegram message**
    ```python
@@ -141,7 +141,7 @@ Error logging: All attempts tracked
    - Deletes local media file
    - Frees disk space
 
-## 📁 Files Created
+## Files Created
 
 1. **app/queue_manager.py** (530 lines)
    - QueueManager class
@@ -167,7 +167,7 @@ Error logging: All attempts tracked
    - Tests retry logic
    - Validates error logging
 
-## 🎯 Production Usage
+## Production Usage
 
 ### Application Startup
 ```python
@@ -208,17 +208,17 @@ async def telegram_webhook(update: dict):
 queue_manager.purge_old_jobs(days=7)
 ```
 
-## ✨ Key Features
+## Key Features
 
-✅ **Thread-safe** - Uses SQLite with proper locking  
-✅ **Resilient** - Automatic retries with backoff  
-✅ **Clean** - Auto-deletes media after posting  
-✅ **Monitored** - Status tracking and error logging  
-✅ **Efficient** - Indexed queries, minimal overhead  
-✅ **Configurable** - Intervals, retries, purge settings  
-✅ **Tested** - Multiple test scripts verify functionality  
+- **Thread-safe** - Uses SQLite with proper locking  
+- **Resilient** - Automatic retries with backoff  
+- **Clean** - Auto-deletes media after posting  
+- **Monitored** - Status tracking and error logging  
+- **Efficient** - Indexed queries, minimal overhead  
+- **Configurable** - Intervals, retries, purge settings  
+- **Tested** - Multiple test scripts verify functionality  
 
-## 📈 Performance
+## Performance
 
 - **Database:** SQLite with WAL mode (concurrent reads)
 - **Memory:** Minimal - processes jobs one at a time
@@ -226,7 +226,7 @@ queue_manager.purge_old_jobs(days=7)
 - **CPU:** Low - sleeps between checks (60s default)
 - **Scalability:** Suitable for 100s of posts/day
 
-## 🔐 Error Handling
+## Error Handling
 
 All errors are:
 1. Logged to console with timestamps
@@ -234,6 +234,6 @@ All errors are:
 3. Used to determine retry behavior
 4. Available via monitoring API
 
-## 🎉 Summary
+## Summary
 
 The queue manager provides a robust, production-ready system for scheduling and processing social media posts across multiple platforms with automatic retries, error handling, and cleanup.

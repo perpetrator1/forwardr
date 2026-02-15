@@ -51,11 +51,11 @@ def print_platform_status():
         
         if is_enabled:
             enabled_count += 1
-            status = "✓ ENABLED"
+            status = "ENABLED"
             status_color = "\033[92m"  # Green
         else:
             disabled_count += 1
-            status = "✗ DISABLED"
+            status = "DISABLED"
             status_color = "\033[91m"  # Red
         
         reset_color = "\033[0m"
@@ -86,7 +86,7 @@ def print_summary(enabled_count, disabled_count):
     if enabled_count > 0:
         print("Ready to use:", ", ".join(ENABLED_PLATFORMS))
     else:
-        print("\033[93m⚠ WARNING: No platforms are configured!\033[0m")
+        print("\033[93mWARNING: No platforms are configured!\033[0m")
         print("Please add credentials to your .env file to enable platforms.")
     
     print()
@@ -118,11 +118,11 @@ def print_env_file_status():
     env_example_path = Path(__file__).parent / ".env.example"
     
     if env_path.exists():
-        print(f"✓ .env file found: {env_path}")
+        print(f".env file found: {env_path}")
         file_size = env_path.stat().st_size
         print(f"  Size: {file_size} bytes")
     else:
-        print(f"\033[91m✗ .env file not found: {env_path}\033[0m")
+        print(f"\033[91m.env file not found: {env_path}\033[0m")
         if env_example_path.exists():
             print(f"  Hint: Copy {env_example_path} to {env_path} and fill in your credentials")
     

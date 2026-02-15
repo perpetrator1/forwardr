@@ -99,7 +99,7 @@ def test_retry_logic():
         interval_minutes=0.1  # 6 seconds apart
     )
     
-    print(f"✓ Created {len(job_ids)} jobs")
+    print(f"Created {len(job_ids)} jobs")
     print(f"  • Job #1 will fail 2 times before succeeding")
     print(f"  • Job #2 will succeed immediately")
     print()
@@ -108,7 +108,7 @@ def test_retry_logic():
     print("Starting processor...")
     print("-" * 80)
     queue_manager.start_processor()
-    print("✓ Processor started\n")
+    print("Processor started\n")
     
     # Monitor for up to 90 seconds (enough time for retries)
     print("Monitoring progress...")
@@ -137,13 +137,13 @@ def test_retry_logic():
                     print(f"    Job #{job['id']} ({job['platform']}): "
                           f"Attempt {job['attempts']}, scheduled for {job['scheduled_time'][-8:]}")
                 elif job['status'] == 'completed':
-                    print(f"    Job #{job['id']} ({job['platform']}): ✓ Completed")
+                    print(f"    Job #{job['id']} ({job['platform']}): Completed")
                 elif job['status'] == 'failed':
-                    print(f"    Job #{job['id']} ({job['platform']}): ✗ Failed permanently")
+                    print(f"    Job #{job['id']} ({job['platform']}): Failed permanently")
             
             # Check if done
             if status['pending'] == 0 and status['total'] > 0:
-                print("\n✓ All jobs completed!")
+                print("\nAll jobs completed!")
                 break
         
         # Final results
@@ -171,7 +171,7 @@ def test_retry_logic():
         queue_manager.stop_processor()
     
     print("=" * 80)
-    print("✓ Retry test completed!\n")
+    print("Retry test completed!\n")
 
 
 if __name__ == "__main__":

@@ -122,9 +122,9 @@ def example_cleanup():
     success = handler.cleanup_media(media_info)
     
     if success:
-        print(f"✓ Deleted: {media_info.local_path}")
+        print(f"Deleted: {media_info.local_path}")
     else:
-        print(f"✗ File not found or already deleted: {media_info.local_path}")
+        print(f"File not found or already deleted: {media_info.local_path}")
     
     print()
     print("=" * 70)
@@ -179,7 +179,7 @@ def main():
     # Example 4: Cleanup
     # example_cleanup()  # Uncomment to test cleanup
     
-    print("\n✓ All examples completed!\n")
+    print("\nAll examples completed!\n")
 
 
 if __name__ == "__main__":

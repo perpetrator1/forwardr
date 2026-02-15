@@ -41,15 +41,15 @@ def print_section(title):
 def print_status_table(status: dict):
     """Print status in a nice table format"""
     print()
-    print("┌" + "─" * 38 + "┐")
-    print("│" + " " * 12 + "QUEUE STATUS" + " " * 14 + "│")
-    print("├" + "─" * 38 + "┤")
-    print(f"│  Pending:   {status['pending']:4d}                    │")
-    print(f"│  Completed: {status['completed']:4d}                    │")
-    print(f"│  Failed:    {status['failed']:4d}                    │")
-    print("├" + "─" * 38 + "┤")
-    print(f"│  Total:     {status['total']:4d}                    │")
-    print("└" + "─" * 38 + "┘")
+    print("+" + "-" * 38 + "+")
+    print("|" + " " * 12 + "QUEUE STATUS" + " " * 14 + "|")
+    print("+" + "-" * 38 + "+")
+    print(f"|  Pending:   {status['pending']:4d}                    |")
+    print(f"|  Completed: {status['completed']:4d}                    |")
+    print(f"|  Failed:    {status['failed']:4d}                    |")
+    print("+" + "-" * 38 + "+")
+    print(f"|  Total:     {status['total']:4d}                    |")
+    print("+" + "-" * 38 + "+")
     print()
 
 
@@ -67,7 +67,7 @@ def create_test_jobs(queue_manager: QueueManager, interval_seconds: int = 5):
     media_info = MediaInfo(
         type="photo",
         file_id="test_photo_123",
-        caption="This is a test post for the queue system! 🚀 #automation #test",
+        caption="This is a test post for the queue system! #automation #test",
         local_path="./test_image.jpg",
         mime_type="image/jpeg"
     )
@@ -92,7 +92,7 @@ def create_test_jobs(queue_manager: QueueManager, interval_seconds: int = 5):
         interval_minutes=interval_seconds / 60  # Convert seconds to minutes
     )
     
-    print(f"✓ Created {len(job_ids)} jobs:")
+    print(f"Created {len(job_ids)} jobs:")
     for i, (platform, job_id) in enumerate(zip(platforms, job_ids)):
         delay = i * interval_seconds
         print(f"  • Job #{job_id:3d} - {platform:12} (scheduled in {delay}s)")
@@ -131,7 +131,7 @@ def monitor_queue(queue_manager: QueueManager, check_interval: int = 5, max_iter
         
         # Check if all jobs are done
         if status['pending'] == 0 and status['total'] > 0:
-            print("✓ All jobs completed!")
+            print("All jobs completed!")
             break
         
         # Wait for next check
@@ -139,7 +139,7 @@ def monitor_queue(queue_manager: QueueManager, check_interval: int = 5, max_iter
             time.sleep(check_interval)
     
     if iteration >= max_iterations:
-        print("⚠ Maximum iterations reached, stopping monitor")
+        print("WARNING: Maximum iterations reached, stopping monitor")
     
     print()
 
@@ -159,10 +159,10 @@ def show_job_details(queue_manager: QueueManager):
     
     for job in jobs:
         status_symbol = {
-            'pending': '⏳',
-            'completed': '✓',
-            'failed': '✗'
-        }.get(job['status'], '?')
+            'pending': '[PENDING]',
+            'completed': '[DONE]',
+            'failed': '[FAILED]'
+        }.get(job['status'], '[UNKNOWN]')
         
         print(f"{status_symbol} Job #{job['id']:3d} - {job['platform']:12} "
               f"[{job['status']:9}] "
@@ -199,7 +199,7 @@ def test_queue_system():
     # Clean up old test database if it exists
     if Path(db_path).exists():
         Path(db_path).unlink()
-        print("✓ Removed old test database")
+        print("Removed old test database")
         print()
     
     # Create queue manager
@@ -220,7 +220,7 @@ def test_queue_system():
     print_section("STARTING PROCESSOR")
     print("Starting background processor thread...")
     queue_manager.start_processor()
-    print("✓ Processor started")
+    print("Processor started")
     print()
     
     # Monitor progress
@@ -239,7 +239,7 @@ def test_queue_system():
         print_section("TESTING PURGE FUNCTION")
         print("Testing purge of old jobs (simulated)...")
         deleted = queue_manager.purge_old_jobs(days=7)
-        print(f"✓ Purge function executed (deleted {deleted} jobs)")
+        print(f"Purge function executed (deleted {deleted} jobs)")
         print()
         
     finally:
@@ -247,11 +247,11 @@ def test_queue_system():
         print_section("CLEANUP")
         print("Stopping processor...")
         queue_manager.stop_processor()
-        print("✓ Processor stopped")
+        print("Processor stopped")
         print()
     
     print_separator("=", 80)
-    print("✓ Test completed successfully!")
+    print("Test completed successfully!")
     print_separator("=", 80)
     print()
 
@@ -261,7 +261,7 @@ def main():
     try:
         test_queue_system()
     except KeyboardInterrupt:
-        print("\n\n⚠ Test interrupted by user")
+        print("\n\nWARNING: Test interrupted by user")
         sys.exit(1)
     except Exception as e:
         logger.error(f"Test failed: {e}", exc_info=True)

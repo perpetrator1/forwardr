@@ -53,11 +53,11 @@ def test_media_handler(image_path: str):
     
     # Validate input file
     if not input_path.exists():
-        print(f"❌ Error: File not found: {input_path}")
+        print(f"ERROR: File not found: {input_path}")
         sys.exit(1)
     
     if not input_path.suffix.lower() in [".jpg", ".jpeg", ".png", ".gif", ".webp"]:
-        print(f"⚠ Warning: File may not be a valid image: {input_path}")
+        print(f"WARNING: File may not be a valid image: {input_path}")
     
     print_section("MEDIA HANDLER TEST")
     
@@ -78,13 +78,13 @@ def test_media_handler(image_path: str):
     # Create handler
     handler = MediaHandler(bot_token="", media_dir="./media")
     
-    print("🔄 Generating platform-specific variants...\n")
+    print("Generating platform-specific variants...\n")
     
     # Generate variants for all platforms
     variants = handler.get_media_variants(media_info)
     
     if not variants:
-        print("❌ Failed to generate variants!")
+        print("ERROR: Failed to generate variants!")
         sys.exit(1)
     
     # Display results
@@ -119,7 +119,7 @@ def test_media_handler(image_path: str):
     # List all created files
     print("Created files:")
     for platform, info in sorted(variants.items()):
-        print(f"  ✓ {info['path']}")
+        print(f"  {info['path']}")
     print()
     
     print_separator()

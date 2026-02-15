@@ -4,9 +4,9 @@ Automate your social media posting across multiple platforms with a single messa
 
 ## Features
 
-- 📱 Send media to a Telegram bot to trigger automated posting
-- ⏱️ Automatic queuing with 1-hour delay between posts
-- 🌐 Multi-platform support:
+- Send media to a Telegram bot to trigger automated posting
+- Automatic queuing with 1-hour delay between posts
+- Multi-platform support:
   - Telegram Channel
   - Bluesky
   - Mastodon
@@ -16,10 +16,10 @@ Automate your social media posting across multiple platforms with a single messa
   - Reddit
   - YouTube
   - Personal Website
-- 🔄 Automatic retry on failures
-- 📊 SQLite-based job queue
-- ☁️ Cloudflare Worker webhook receiver
-- 🚀 Deployed on Render.com free tier
+- Automatic retry on failures
+- SQLite-based job queue
+- Cloudflare Worker webhook receiver
+- Deployed on Render.com free tier
 
 ## Architecture
 
@@ -140,8 +140,15 @@ curl -X POST "https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook?url=<YOUR_
 
 ### Instagram
 
-1. Use your Instagram credentials
-2. Note: Instagram posting via API is limited; this uses instagrapi (unofficial)
+1. Convert your Instagram account to a Professional Account (if not already):
+   - Go to Settings → Account → Switch to Professional Account
+2. Create a Facebook Page and link it to your Instagram Professional Account
+3. Set up a Facebook App in [Facebook Developers](https://developers.facebook.com):
+   - Create a new app → Business type
+   - Add Instagram Graph API product
+   - Configure Instagram Basic Display
+4. Generate a long-lived access token for the Instagram Graph API
+5. Get your Instagram Business Account ID
 
 ### Threads
 
@@ -169,7 +176,7 @@ curl -X POST "https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook?url=<YOUR_
 
 ### Personal Website
 
-Configure your website's API endpoint and authentication method.
+Still figuring out this part
 
 ## Usage
 
@@ -205,21 +212,6 @@ Edit `app/config.py` to customize:
 - Enabled platforms
 - Media file size limits
 
-## Troubleshooting
-
-### Database locked error
-- Ensure only one worker process is running
-- Check file permissions on the database file
-
-### Platform posting failures
-- Verify API credentials in `.env`
-- Check platform-specific rate limits
-- Review logs for detailed error messages
-
-### Cloudflare Worker timeouts
-- Ensure your Render.com service is not sleeping (upgrade to paid tier or use a uptime monitor)
-- Check Cloudflare Worker logs
-
 ## Project Structure
 
 ```
@@ -241,27 +233,8 @@ forwardr/
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+any sort of help is welcome :)
 
 ## License
 
 MIT License - feel free to use this project for personal or commercial purposes.
-
-## Security Notes
-
-- Never commit `.env` or credential files to version control
-- Use environment variables for all sensitive data
-- Rotate API keys regularly
-- Enable 2FA on all platform accounts
-- Use app-specific passwords where available
-
-## Limitations
-
-- Render.com free tier sleeps after 15 minutes of inactivity
-- Instagram and Threads use unofficial APIs (use at your own risk)
-- Platform rate limits apply
-- YouTube requires OAuth2 flow for initial setup
-
-## Support
-
-For issues, questions, or contributions, please open an issue on GitHub.

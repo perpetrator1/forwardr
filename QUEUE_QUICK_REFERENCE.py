@@ -146,13 +146,13 @@ async def startup():
     global queue_manager
     queue_manager = get_queue_manager()
     queue_manager.start_processor()
-    print("✓ Queue processor started")
+    print("Queue processor started")
 
 # Shutdown cleanup
 @app.on_event("shutdown")
 async def shutdown():
     queue_manager.stop_processor()
-    print("✓ Queue processor stopped")
+    print("Queue processor stopped")
 
 # Webhook endpoint
 @app.post("/webhook/telegram")

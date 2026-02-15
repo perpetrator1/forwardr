@@ -258,19 +258,22 @@ class QueueManager:
             media_info_dict = json.loads(job['media_info'])
             media_info = MediaInfo(**media_info_dict)
             
-            # TODO: Integrate with actual platform posting logic
-            # For now, simulate processing
+            # Import platform router
+            from app.services.platforms import post_to_platform
+            
+            # Post to platform using router
             logger.info(f"Posting to {platform}: {media_info.caption[:50] if media_info.caption else 'No caption'}")
             
-            # Simulate success (in real implementation, call platform API)
-            # from app.services.platforms.{platform} import post
-            # result = post(media_info)
+            result = post_to_platform(platform, media_info.to_dict())
             
-            # Mark as completed
-            post_url = f"https://{platform}.com/post/{job_id}"  # Mock URL
-            self.update_job_status(job_id, 'completed', post_url=post_url)
-            
-            return True
+            if result:
+                # Mark as completed
+                post_url = f"https://{platform}.com/post/{job_id}"  # TODO: Get real URL from platform response
+                self.update_job_status(job_id, 'completed', post_url=post_url)
+                return True
+            else:
+                # Platform returned False
+                raise Exception(f"Platform {platform} returned False")
             
         except Exception as e:
             error_msg = str(e)
