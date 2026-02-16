@@ -126,21 +126,21 @@ class InstagramSettings(BaseSettings):
 class ThreadsSettings(BaseSettings):
     """Threads (Meta) configuration"""
     model_config = SettingsConfigDict(env_prefix="THREADS_")
-    
-    username: Optional[str] = Field(default=None)
-    password: Optional[str] = Field(default=None)
-    
+
+    access_token: Optional[str] = Field(default=None)
+    user_id: Optional[str] = Field(default=None)
+
     def is_complete(self) -> bool:
         """Check if all required credentials are present"""
-        return bool(self.username and self.password)
-    
+        return bool(self.access_token and self.user_id)
+
     def get_missing_fields(self) -> List[str]:
         """Return list of missing required fields"""
         missing = []
-        if not self.username:
-            missing.append("THREADS_USERNAME")
-        if not self.password:
-            missing.append("THREADS_PASSWORD")
+        if not self.access_token:
+            missing.append("THREADS_ACCESS_TOKEN")
+        if not self.user_id:
+            missing.append("THREADS_USER_ID")
         return missing
 
 
