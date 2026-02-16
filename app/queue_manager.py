@@ -419,6 +419,7 @@ class QueueManager:
                 'pending': 0,
                 'completed': 0,
                 'failed': 0,
+                'cancelled': 0,
                 'total': 0
             }
             
@@ -429,6 +430,40 @@ class QueueManager:
                 status_counts['total'] += count
         
         return status_counts
+
+    def cancel_job(self, job_id: int) -> bool:
+        """
+        Cancel a pending job
+
+        Args:
+            job_id: Job ID
+
+        Returns:
+            True if cancelled, False otherwise
+        """
+        now = datetime.utcnow().isoformat()
+
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT status FROM jobs WHERE id = ?",
+                (job_id,)
+            )
+            row = cursor.fetchone()
+            if not row:
+                logger.error(f"Job #{job_id} not found")
+                return False
+
+            if row['status'] != 'pending':
+                logger.warning(f"Job #{job_id} is not pending and cannot be cancelled")
+                return False
+
+            conn.execute(
+                "UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?",
+                ('cancelled', now, job_id),
+            )
+
+        logger.info(f"Job #{job_id} cancelled")
+        return True
     
     def purge_old_jobs(self, days: int = 7) -> int:
         """
