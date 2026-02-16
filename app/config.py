@@ -63,18 +63,19 @@ class BlueskySettings(BaseSettings):
     """Bluesky (AT Protocol) configuration"""
     model_config = SettingsConfigDict(env_prefix="BLUESKY_")
     
+    username: Optional[str] = Field(default=None)
     handle: Optional[str] = Field(default=None)
     password: Optional[str] = Field(default=None)
     
     def is_complete(self) -> bool:
         """Check if all required credentials are present"""
-        return bool(self.handle and self.password)
+        return bool((self.username or self.handle) and self.password)
     
     def get_missing_fields(self) -> List[str]:
         """Return list of missing required fields"""
         missing = []
-        if not self.handle:
-            missing.append("BLUESKY_HANDLE")
+        if not (self.username or self.handle):
+            missing.append("BLUESKY_USERNAME")
         if not self.password:
             missing.append("BLUESKY_PASSWORD")
         return missing
