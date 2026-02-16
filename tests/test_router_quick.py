@@ -5,7 +5,7 @@ Platform Router - Quick Integration Test
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 print("\n" + "=" * 70)
 print("  PLATFORM ROUTER - QUICK TEST")

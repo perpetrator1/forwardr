@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 # Add project root to path
-project_root = Path(__file__).parent
+project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 # Configure logging
@@ -51,7 +51,7 @@ def test_image_post():
     logger.info("=" * 60)
     
     # Try to find a test image in media directory
-    media_dir = Path(__file__).parent / "media"
+    media_dir = Path(__file__).parent.parent / "media"
     test_image = None
     
     if media_dir.exists():

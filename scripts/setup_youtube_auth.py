@@ -9,7 +9,7 @@ _SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 
 
 def _resolve_path(path_value: str | None, fallback: str) -> Path:
-    root = Path(__file__).resolve().parent
+    root = Path(__file__).resolve().parent.parent
     if not path_value:
         path_value = fallback
     path = Path(path_value)

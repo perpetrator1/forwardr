@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-Send a test text message and image to Bluesky.
+Send a test text message and image to a Telegram channel.
 """
 import logging
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.config import settings
-from app.platforms.bluesky import post_to_bluesky
+from app.platforms.telegram_channel import post_to_telegram_channel
 
 logging.basicConfig(
     level=logging.INFO,
@@ -37,40 +37,39 @@ def ensure_test_image() -> Path:
 
 
 def main() -> int:
-    if not settings.bluesky.is_complete():
-        missing = settings.bluesky.get_missing_fields()
-        logger.error(f"Bluesky credentials missing: {', '.join(missing)}")
+    if not settings.telegram.is_complete():
+        missing = settings.telegram.get_missing_fields()
+        logger.error(f"Telegram credentials missing: {', '.join(missing)}")
         return 1
 
-    logger.info("Sending test text post...")
-    text_ok = post_to_bluesky(
+    logger.info("Sending test text message...")
+    text_ok = post_to_telegram_channel(
         {
             "type": "text",
-            "caption": "Forwardr test: Bluesky text post",
+            "caption": "Forwardr test: text message",
         }
     )
 
-    logger.info("Sending test image post...")
+    logger.info("Sending test image...")
     try:
         image_path = ensure_test_image()
     except RuntimeError as exc:
         logger.error(str(exc))
         return 1
 
-    image_ok = post_to_bluesky(
+    image_ok = post_to_telegram_channel(
         {
             "type": "photo",
-            "caption": "Forwardr test: Bluesky image post",
+            "caption": "Forwardr test: image message",
             "local_path": str(image_path),
-            "alt_text": "",
         }
     )
 
     if text_ok and image_ok:
-        logger.info("Bluesky test completed successfully")
+        logger.info("Telegram test completed successfully")
         return 0
 
-    logger.error("Bluesky test failed")
+    logger.error("Telegram test failed")
     return 1
 
 
