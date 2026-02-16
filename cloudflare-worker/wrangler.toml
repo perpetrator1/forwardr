@@ -1,12 +1,13 @@
 name = "forwardr-webhook"
-main = "worker.js"
+main = "index.js"
 compatibility_date = "2024-01-01"
 
-# Environment variables for the worker
-# These will be set via Wrangler CLI or Cloudflare dashboard
+# Environment variables and secrets are set via Wrangler
 [vars]
-# FASTAPI_BACKEND_URL = "https://your-app.onrender.com"
-# API_SECRET_KEY = "your-secret-key"
+# RENDER_URL = "https://forwardr.onrender.com"
+# API_KEY = "your-secret-key"
 
-# Example secrets (set via: wrangler secret put SECRET_NAME)
-# - API_SECRET_KEY: Secret key for authenticating with the backend
+[[kv_namespaces]]
+binding = "FAILED_UPDATES"
+id = "REPLACE_WITH_KV_ID"
+preview_id = "REPLACE_WITH_PREVIEW_KV_ID"
