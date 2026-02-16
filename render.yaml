@@ -1,0 +1,100 @@
+services:
+  - type: web
+    name: forwardr
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    disk:
+      name: media-disk
+      mountPath: /media
+      sizeGB: 1
+    envVars:
+      - key: ENVIRONMENT
+        sync: false
+      - key: API_SECRET_KEY
+        sync: false
+      - key: CLOUDFLARE_WORKER_URL
+        sync: false
+      - key: DATABASE_PATH
+        sync: false
+      - key: MEDIA_STORAGE_PATH
+        sync: false
+      - key: MAX_MEDIA_SIZE_MB
+        sync: false
+      - key: POST_DELAY_SECONDS
+        sync: false
+      - key: MAX_RETRY_ATTEMPTS
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHANNEL_ID
+        sync: false
+      - key: TELEGRAM_API_ID
+        sync: false
+      - key: TELEGRAM_API_HASH
+        sync: false
+      - key: BLUESKY_HANDLE
+        sync: false
+      - key: BLUESKY_APP_PASSWORD
+        sync: false
+      - key: MASTODON_INSTANCE_URL
+        sync: false
+      - key: MASTODON_ACCESS_TOKEN
+        sync: false
+      - key: INSTAGRAM_USERNAME
+        sync: false
+      - key: INSTAGRAM_PASSWORD
+        sync: false
+      - key: INSTAGRAM_SESSION_FILE
+        sync: false
+      - key: THREADS_ACCESS_TOKEN
+        sync: false
+      - key: THREADS_USER_ID
+        sync: false
+      - key: TWITTER_API_KEY
+        sync: false
+      - key: TWITTER_API_SECRET
+        sync: false
+      - key: TWITTER_ACCESS_TOKEN
+        sync: false
+      - key: TWITTER_ACCESS_TOKEN_SECRET
+        sync: false
+      - key: TWITTER_BEARER_TOKEN
+        sync: false
+      - key: REDDIT_CLIENT_ID
+        sync: false
+      - key: REDDIT_CLIENT_SECRET
+        sync: false
+      - key: REDDIT_USERNAME
+        sync: false
+      - key: REDDIT_PASSWORD
+        sync: false
+      - key: REDDIT_USER_AGENT
+        sync: false
+      - key: REDDIT_SUBREDDIT
+        sync: false
+      - key: REDDIT_DEFAULT_TITLE
+        sync: false
+      - key: YOUTUBE_CLIENT_SECRETS_FILE
+        sync: false
+      - key: YOUTUBE_TOKEN_FILE
+        sync: false
+      - key: WEBSITE_API_URL
+        sync: false
+      - key: WEBSITE_API_TOKEN
+        sync: false
+      - key: WEBSITE_AUTH_METHOD
+        sync: false
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: IMGBB_API_KEY
+        sync: false
+      - key: LOG_LEVEL
+        sync: false
+      - key: LOG_FILE_PATH
+        sync: false
