@@ -169,7 +169,6 @@ def main() -> None:
                     "threads",
                     "twitter",
                     "reddit",
-                    "website",
                 ]
 
             app_main.determine_platforms = all_platforms

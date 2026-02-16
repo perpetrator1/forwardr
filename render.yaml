@@ -80,12 +80,6 @@ services:
         sync: false
       - key: YOUTUBE_TOKEN_FILE
         sync: false
-      - key: WEBSITE_API_URL
-        sync: false
-      - key: WEBSITE_API_TOKEN
-        sync: false
-      - key: WEBSITE_AUTH_METHOD
-        sync: false
       - key: CLOUDINARY_CLOUD_NAME
         sync: false
       - key: CLOUDINARY_API_KEY

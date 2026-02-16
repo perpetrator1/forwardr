@@ -234,25 +234,6 @@ class YouTubeSettings(BaseSettings):
         return missing
 
 
-class WebsiteSettings(BaseSettings):
-    """Website/webhook configuration"""
-    model_config = SettingsConfigDict(env_prefix="WEBSITE_")
-    
-    webhook_url: Optional[str] = Field(default=None)
-    api_key: Optional[str] = Field(default=None)
-    
-    def is_complete(self) -> bool:
-        """Check if all required credentials are present"""
-        return bool(self.webhook_url)
-    
-    def get_missing_fields(self) -> List[str]:
-        """Return list of missing required fields"""
-        missing = []
-        if not self.webhook_url:
-            missing.append("WEBSITE_WEBHOOK_URL")
-        return missing
-
-
 # Main Settings Class
 class Settings:
     """Main settings container with platform validation"""
@@ -270,7 +251,6 @@ class Settings:
         self.twitter = TwitterSettings()
         self.reddit = RedditSettings()
         self.youtube = YouTubeSettings()
-        self.website = WebsiteSettings()
         
         # Platform registry
         self._platforms = {
@@ -282,7 +262,6 @@ class Settings:
             "twitter": self.twitter,
             "reddit": self.reddit,
             "youtube": self.youtube,
-            "website": self.website,
         }
         
         # Validate and set enabled platforms

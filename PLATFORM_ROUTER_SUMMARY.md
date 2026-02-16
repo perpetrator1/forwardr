@@ -23,7 +23,6 @@ _PLATFORM_MODULES = {
     'twitter': 'twitter',
     'reddit': 'reddit',
     'youtube': 'youtube',
-    'website': 'website',
 }
 ```
 
@@ -66,10 +65,10 @@ Media-type-based routing logic:
 
 | Media Type | Supported Platforms |
 |------------|-------------------|
-| **photo** | telegram, bluesky, mastodon, instagram, threads, twitter, reddit, website |
-| **video** | telegram, bluesky, mastodon, youtube, twitter, website |
-| **text** | telegram, bluesky, mastodon, twitter, reddit, website |
-| **document** | telegram, website |
+| **photo** | telegram, bluesky, mastodon, instagram, threads, twitter, reddit |
+| **video** | telegram, bluesky, mastodon, youtube, twitter |
+| **text** | telegram, bluesky, mastodon, twitter, reddit |
+| **document** | telegram |
 
 ```python
 media_info = {'type': 'photo'}
@@ -165,7 +164,6 @@ Loaded platform handlers:
   ✓ telegram
   ✓ threads
   ✓ twitter
-  ✓ website
   ✓ youtube
 
 All platforms loaded successfully!
@@ -305,7 +303,6 @@ queue_manager.start_processor()
     - `threads.py` - Threads (Meta)
     - `reddit.py` - Reddit
     - `youtube.py` - YouTube
-    - `website.py` - Custom webhook
 
 3. **test_platform_router.py** (250 lines)
    - Comprehensive router tests

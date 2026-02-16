@@ -105,7 +105,7 @@ async def complete_workflow_example():
     
     print(f"✓ Media type '{media_info.type}' compatible with:")
     print(f"  All platforms: telegram, bluesky, mastodon, instagram, threads,")
-    print(f"                 twitter, reddit, website")
+    print(f"                 twitter, reddit")
     print(f"  Available now: {', '.join(platforms) if platforms else 'none'}")
     print()
     

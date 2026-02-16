@@ -40,8 +40,7 @@ forwardr/
 │   │       ├── threads.py                # Threads (Meta) posting
 │   │       ├── twitter.py                # Twitter/X posting
 │   │       ├── reddit.py                 # Reddit posting
-│   │       ├── youtube.py                # YouTube posting
-│   │       └── website.py                # Personal website posting
+│   │       └── youtube.py                # YouTube posting
 │   │
 │   ├── utils/                            # Utility functions
 │   │   ├── __init__.py
@@ -114,7 +113,6 @@ Each file contains platform-specific posting logic:
 - **`twitter.py`**: Post to Twitter/X using tweepy
 - **`reddit.py`**: Post to Reddit using praw
 - **`youtube.py`**: Upload to YouTube using Google API client
-- **`website.py`**: Post to personal website via custom API
 
 #### Utilities (`app/utils/`)
 - **`media.py`**: Download media from Telegram, process images/videos, manage storage

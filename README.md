@@ -15,7 +15,6 @@ Automate your social media posting across multiple platforms with a single messa
   - Twitter/X
   - Reddit
   - YouTube
-  - Personal Website
 - Automatic retry on failures
 - SQLite-based job queue
 - Cloudflare Worker webhook receiver
@@ -173,10 +172,6 @@ curl -X POST "https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook?url=<YOUR_
 2. Enable YouTube Data API v3
 3. Create OAuth 2.0 credentials
 4. Download the client configuration
-
-### Personal Website
-
-Still figuring out this part
 
 ## Usage
 

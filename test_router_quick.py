@@ -45,10 +45,10 @@ print()
 # Test 4: Test routing logic
 print("4. Routing logic test:")
 test_cases = [
-    ('photo', ['telegram', 'bluesky', 'mastodon', 'instagram', 'threads', 'twitter', 'reddit', 'website']),
-    ('video', ['telegram', 'bluesky', 'mastodon', 'youtube', 'twitter', 'website']),
-    ('text', ['telegram', 'bluesky', 'mastodon', 'twitter', 'reddit', 'website']),
-    ('document', ['telegram', 'website']),
+    ('photo', ['telegram', 'bluesky', 'mastodon', 'instagram', 'threads', 'twitter', 'reddit']),
+    ('video', ['telegram', 'bluesky', 'mastodon', 'youtube', 'twitter']),
+    ('text', ['telegram', 'bluesky', 'mastodon', 'twitter', 'reddit']),
+    ('document', ['telegram']),
 ]
 
 for media_type, expected_platforms in test_cases:

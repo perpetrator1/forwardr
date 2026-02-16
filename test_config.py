@@ -39,7 +39,7 @@ def print_platform_status():
     # Get all platforms
     all_platforms = [
         "telegram", "bluesky", "mastodon", "instagram", 
-        "threads", "twitter", "reddit", "youtube", "website"
+        "threads", "twitter", "reddit", "youtube"
     ]
     
     enabled_count = 0

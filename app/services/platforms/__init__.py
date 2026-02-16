@@ -63,7 +63,6 @@ _PLATFORM_MODULES = {
     'twitter': 'twitter',
     'reddit': 'reddit',
     'youtube': 'youtube',
-    'website': 'website',
 }
 
 # Attempt to import all platforms
@@ -99,10 +98,10 @@ def determine_platforms(media_info: Dict) -> List[str]:
     Determine which platforms to post to based on media type
     
     Routing logic:
-    - photo → telegram, bluesky, mastodon, instagram, threads, twitter, reddit, website
-    - video → telegram, bluesky, mastodon, youtube, twitter, website
-    - text  → telegram, bluesky, mastodon, twitter, reddit, website
-    - document → telegram, website
+    - photo → telegram, bluesky, mastodon, instagram, threads, twitter, reddit
+    - video → telegram, bluesky, mastodon, youtube, twitter
+    - text  → telegram, bluesky, mastodon, twitter, reddit
+    - document → telegram
     
     Args:
         media_info: MediaInfo dictionary with 'type' field
@@ -116,18 +115,18 @@ def determine_platforms(media_info: Dict) -> List[str]:
     platform_support = {
         'photo': [
             'telegram', 'bluesky', 'mastodon', 'instagram', 
-            'threads', 'twitter', 'reddit', 'website'
+            'threads', 'twitter', 'reddit'
         ],
         'video': [
             'telegram', 'bluesky', 'mastodon', 'youtube', 
-            'twitter', 'website'
+            'twitter'
         ],
         'text': [
             'telegram', 'bluesky', 'mastodon', 'twitter', 
-            'reddit', 'website'
+            'reddit'
         ],
         'document': [
-            'telegram', 'website'
+            'telegram'
         ],
     }
     
