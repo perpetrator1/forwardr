@@ -186,6 +186,8 @@ class RedditSettings(BaseSettings):
     username: Optional[str] = Field(default=None)
     password: Optional[str] = Field(default=None)
     user_agent: Optional[str] = Field(default="forwardr/1.0")
+    subreddit: Optional[str] = Field(default=None)
+    default_title: str = Field(default="Forwardr update")
     
     def is_complete(self) -> bool:
         """Check if all required credentials are present"""
@@ -193,7 +195,8 @@ class RedditSettings(BaseSettings):
             self.client_id and 
             self.client_secret and 
             self.username and 
-            self.password
+            self.password and
+            self.subreddit
         )
     
     def get_missing_fields(self) -> List[str]:
@@ -207,6 +210,8 @@ class RedditSettings(BaseSettings):
             missing.append("REDDIT_USERNAME")
         if not self.password:
             missing.append("REDDIT_PASSWORD")
+        if not self.subreddit:
+            missing.append("REDDIT_SUBREDDIT")
         return missing
 
 
