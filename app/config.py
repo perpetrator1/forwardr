@@ -220,7 +220,7 @@ class YouTubeSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="YOUTUBE_")
     
     client_secrets_file: Optional[str] = Field(default=None)
-    credentials_file: Optional[str] = Field(default=None)
+    token_file: Optional[str] = Field(default=None)
     
     def is_complete(self) -> bool:
         """Check if all required credentials are present"""
