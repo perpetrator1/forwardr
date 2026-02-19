@@ -147,7 +147,7 @@ def determine_platforms(media_info: Dict) -> List[str]:
     return platforms
 
 
-def post_to_platform(platform: str, media_info: Dict) -> bool:
+def post_to_platform(platform: str, media_info: Dict) -> str:
     """
     Post to a specific platform
     
@@ -156,7 +156,7 @@ def post_to_platform(platform: str, media_info: Dict) -> bool:
         media_info: MediaInfo dictionary with content to post
         
     Returns:
-        True if post succeeded, False if failed
+        Post URL if successful, empty string if failed
     """
     # Check if platform handler exists
     if platform not in _platform_handlers:
@@ -164,14 +164,14 @@ def post_to_platform(platform: str, media_info: Dict) -> bool:
             f"Platform '{platform}' not available. "
             f"Reason: {_import_errors.get(platform, 'Not imported')}"
         )
-        return False
+        return ""
     
     # Check if platform is configured
     if platform not in ENABLED_PLATFORMS:
         logger.error(
             f"Platform '{platform}' not configured (missing credentials)"
         )
-        return False
+        return ""
     
     try:
         # Get the platform's post function
@@ -183,15 +183,15 @@ def post_to_platform(platform: str, media_info: Dict) -> bool:
         result = post_func(media_info)
         
         if result:
-            logger.info(f"✓ Successfully posted to {platform}")
-            return True
+            logger.info(f"✓ Successfully posted to {platform}: {result}")
+            return result
         else:
-            logger.warning(f"✗ Failed to post to {platform} (returned False)")
-            return False
+            logger.warning(f"✗ Failed to post to {platform} (returned empty/None)")
+            return ""
             
     except Exception as e:
         logger.error(f"✗ Exception posting to {platform}: {str(e)}", exc_info=True)
-        return False
+        return ""
 
 
 def get_platform_errors() -> Dict[str, str]:

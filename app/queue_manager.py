@@ -264,16 +264,15 @@ class QueueManager:
             # Post to platform using router
             logger.info(f"Posting to {platform}: {media_info.caption[:50] if media_info.caption else 'No caption'}")
             
-            result = post_to_platform(platform, media_info.to_dict())
+            post_url = post_to_platform(platform, media_info.to_dict())
             
-            if result:
-                # Mark as completed
-                post_url = f"https://{platform}.com/post/{job_id}"  # TODO: Get real URL from platform response
+            if post_url:
+                # Mark as completed with real URL
                 self.update_job_status(job_id, 'completed', post_url=post_url)
                 return True
             else:
-                # Platform returned False
-                raise Exception(f"Platform {platform} returned False")
+                # Platform returned None/empty
+                raise Exception(f"Platform {platform} returned no URL")
             
         except Exception as e:
             error_msg = str(e)
