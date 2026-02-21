@@ -151,8 +151,28 @@ curl -X POST "https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook?url=<YOUR_
 
 ### Threads
 
-1. Use your Threads credentials
-2. Note: Uses unofficial API; may be subject to rate limits
+**Official Meta API Integration** (Safe & Recommended)
+
+1. Create a Meta Developer app at [developers.facebook.com](https://developers.facebook.com)
+2. Add Threads API product to your app
+3. Generate a long-lived access token with `threads_basic` and `threads_content_publish` permissions
+4. Get your Threads User ID
+
+#### Get Cloudinary (Free) - 2 min
+
+1. Sign up → https://cloudinary.com/
+2. Dashboard → Copy credentials
+3. Add to `.env`:
+
+```bash
+CLOUDINARY_CLOUD_NAME=your_cloud_name
+CLOUDINARY_API_KEY=your_key
+CLOUDINARY_API_SECRET=your_secret
+```
+
+**Rate Limits:** 250 posts per 24 hours, 500 character limit per post
+
+
 
 ### Twitter/X
 
