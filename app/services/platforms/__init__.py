@@ -99,8 +99,8 @@ def determine_platforms(media_info: Dict) -> List[str]:
     
     Routing logic:
     - photo → telegram, bluesky, mastodon, instagram, threads, twitter, reddit
-    - video → telegram, bluesky, mastodon, youtube, twitter
-    - text  → telegram, bluesky, mastodon, twitter, reddit
+    - video → telegram, bluesky, mastodon, threads, youtube, twitter
+    - text  → telegram, bluesky, mastodon, threads, twitter, reddit
     - document → telegram
     
     Args:
@@ -118,12 +118,12 @@ def determine_platforms(media_info: Dict) -> List[str]:
             'threads', 'twitter', 'reddit'
         ],
         'video': [
-            'telegram', 'bluesky', 'mastodon', 'youtube', 
-            'twitter'
+            'telegram', 'bluesky', 'mastodon', 'threads',
+            'youtube', 'twitter'
         ],
         'text': [
-            'telegram', 'bluesky', 'mastodon', 'twitter', 
-            'reddit'
+            'telegram', 'bluesky', 'mastodon', 'threads',
+            'twitter', 'reddit'
         ],
         'document': [
             'telegram'

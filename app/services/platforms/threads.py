@@ -6,8 +6,47 @@ import requests
 logger = logging.getLogger(__name__)
 
 # Meta Graph API endpoints for Threads
-GRAPH_API_VERSION = "v18.0"
+GRAPH_API_VERSION = "v1.0"
 GRAPH_API_BASE = f"https://graph.threads.net/{GRAPH_API_VERSION}"
+
+
+def _resolve_user_id(user_id: str, access_token: str) -> Optional[str]:
+    """
+    Resolve a Threads user ID. If it's already numeric, return as-is.
+    If it's a username, look up the numeric ID via the API.
+    
+    Args:
+        user_id: Numeric ID or username
+        access_token: Access token
+        
+    Returns:
+        Numeric user ID string, or None if lookup failed
+    """
+    # If already numeric, return as-is
+    if user_id.isdigit():
+        return user_id
+    
+    # Look up numeric ID using the /me endpoint
+    try:
+        url = f"{GRAPH_API_BASE}/me"
+        params = {
+            "access_token": access_token,
+            "fields": "id,username"
+        }
+        response = requests.get(url, params=params, timeout=15)
+        response.raise_for_status()
+        
+        result = response.json()
+        numeric_id = result.get("id")
+        if numeric_id:
+            logger.info(f"Threads: Resolved username '{user_id}' to numeric ID {numeric_id}")
+            return numeric_id
+        else:
+            logger.error(f"Threads: Could not resolve user ID from /me response: {result}")
+            return None
+    except Exception as e:
+        logger.error(f"Threads: Failed to resolve user ID '{user_id}': {e}")
+        return None
 
 
 def _upload_media_to_public_url(local_path: str) -> Optional[str]:
@@ -199,6 +238,12 @@ def post(media_info: Dict) -> Optional[str]:
         access_token = settings.threads.access_token
         user_id = settings.threads.user_id
         
+        # Resolve username to numeric ID if needed
+        user_id = _resolve_user_id(user_id, access_token)
+        if not user_id:
+            logger.error("Threads: Could not resolve numeric user ID")
+            return None
+        
         # Get text content (truncate to 500 chars)
         text = media_info.get('caption', '')
         if not text:
@@ -259,6 +304,29 @@ def post(media_info: Dict) -> Optional[str]:
         # Construct post URL
         post_url = f"https://www.threads.net/t/{post_id}"
         logger.info(f"Threads: Posted successfully - {post_url}")
+        
+        # Cleanup: delete media from Cloudinary after successful post
+        if image_url or video_url:
+            try:
+                from app.utils.cloudinary_config import delete_media
+                # Extract public_id from the Cloudinary URL
+                # URL format: https://res.cloudinary.com/.../upload/v123/threads/abc123.jpg
+                media_url = image_url or video_url
+                parts = media_url.split('/upload/')
+                if len(parts) == 2:
+                    # Remove version prefix and file extension
+                    path = parts[1]
+                    # Strip version (v1234567890/)
+                    if '/' in path:
+                        path = '/'.join(path.split('/')[1:])
+                    public_id = path.rsplit('.', 1)[0]
+                    resource_type = 'video' if video_url else 'image'
+                    if delete_media(public_id, resource_type=resource_type):
+                        logger.info(f"Threads: Cleaned up Cloudinary media: {public_id}")
+                    else:
+                        logger.warning(f"Threads: Failed to clean up Cloudinary media: {public_id}")
+            except Exception as e:
+                logger.warning(f"Threads: Cloudinary cleanup error (non-fatal): {e}")
         
         return post_url
         

@@ -42,6 +42,11 @@ def configure_cloudinary() -> bool:
     if not CLOUDINARY_AVAILABLE:
         return False
     
+    # Ensure .env is loaded
+    from pathlib import Path
+    from dotenv import load_dotenv
+    load_dotenv(dotenv_path=Path(__file__).parent.parent.parent / ".env")
+    
     cloud_name = os.getenv('CLOUDINARY_CLOUD_NAME')
     api_key = os.getenv('CLOUDINARY_API_KEY')
     api_secret = os.getenv('CLOUDINARY_API_SECRET')
