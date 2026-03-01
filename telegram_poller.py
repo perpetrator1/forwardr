@@ -25,19 +25,26 @@ TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 def get_bot_info():
     """Get bot information"""
-    response = requests.get(f"{TELEGRAM_API}/getMe")
-    data = response.json()
-    if data.get("ok"):
-        bot = data["result"]
-        return bot
+    try:
+        response = requests.get(f"{TELEGRAM_API}/getMe", timeout=10)
+        data = response.json()
+        if data.get("ok"):
+            bot = data["result"]
+            return bot
+    except Exception as e:
+        print(f"   ⚠️  Failed to get bot info: {e}")
     return None
 
 
 def delete_webhook():
     """Delete any existing webhook"""
-    response = requests.post(f"{TELEGRAM_API}/deleteWebhook")
-    data = response.json()
-    return data.get("ok", False)
+    try:
+        response = requests.post(f"{TELEGRAM_API}/deleteWebhook", timeout=10)
+        data = response.json()
+        return data.get("ok", False)
+    except Exception as e:
+        # Non-fatal - webhook might not exist or network issue
+        return False
 
 
 def get_updates(offset=None):
