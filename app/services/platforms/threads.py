@@ -178,6 +178,39 @@ def _log_api_error(action: str, exc: requests.exceptions.RequestException) -> No
             logger.error(f"Threads API error: {exc.response.text}")
 
 
+def _wait_for_container(user_id: str, access_token: str, container_id: str, timeout: int = 90) -> bool:
+    """Poll the Threads container status until it's FINISHED, or timeout.
+
+    Returns True if the container is ready (or status unknown), False on error.
+    """
+    for _ in range(timeout // 5):
+        try:
+            resp = requests.get(
+                f"{GRAPH_API_BASE}/{container_id}",
+                params={"access_token": access_token, "fields": "status,error_message"},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            status = data.get("status", "")
+            if status == "FINISHED":
+                logger.info(f"Threads: Container {container_id} is ready")
+                return True
+            if status in ("ERROR", "EXPIRED"):
+                logger.error(
+                    f"Threads: Container processing failed — status={status}, "
+                    f"error={data.get('error_message', 'unknown')}"
+                )
+                return False
+            logger.debug(f"Threads: Container status={status}, waiting 5s...")
+            time.sleep(5)
+        except Exception as e:
+            logger.warning(f"Threads: Error polling container status: {e}")
+            time.sleep(5)
+    logger.warning(f"Threads: Container not FINISHED after {timeout}s, attempting publish anyway")
+    return True
+
+
 def _cleanup_cloudinary(media_url: str, is_video: bool = False) -> None:
     """Delete an uploaded file from Cloudinary after posting (best-effort)."""
     try:
@@ -230,9 +263,12 @@ def post(media_info: Dict) -> Optional[str]:
             return None
 
         # --- Text ----------------------------------------------------------------
-        text = media_info.get('caption', '')
-        if not text:
-            logger.error("Threads: No text content provided")
+        text = media_info.get('caption', '') or ''
+        media_type = media_info.get('type', 'text')
+        local_path = media_info.get('local_path')
+        # Only require text for text-only posts; media posts can have empty captions
+        if not text and media_type == 'text' and not local_path:
+            logger.error("Threads: No text content provided for text-only post")
             return None
         if len(text) > 500:
             logger.warning(f"Threads: Truncating text from {len(text)} to 500 chars")
@@ -242,8 +278,6 @@ def post(media_info: Dict) -> Optional[str]:
 
         # --- Media ---------------------------------------------------------------
         image_url = video_url = None
-        media_type = media_info.get('type', 'text')
-        local_path = media_info.get('local_path')
 
         if media_type == 'photo' and local_path:
             image_url = _upload_media_to_public_url(local_path)
@@ -263,8 +297,8 @@ def post(media_info: Dict) -> Optional[str]:
             return None
 
         if image_url or video_url:
-            logger.info("Threads: Waiting for media processing...")
-            time.sleep(2)
+            logger.info("Threads: Waiting for media to be processed by Threads...")
+            _wait_for_container(user_id, access_token, container_id)
 
         post_id = _publish_container(user_id, access_token, container_id)
         if not post_id:

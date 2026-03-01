@@ -2,6 +2,7 @@
 Mastodon platform integration
 """
 import logging
+import time
 from typing import Dict, Optional
 from mastodon import Mastodon
 
@@ -34,6 +35,18 @@ def post(media_info: Dict) -> Optional[str]:
         if media_info['type'] in ['photo', 'video'] and media_info.get('local_path'):
             logger.info(f"Mastodon: Uploading {media_info['type']} from {media_info['local_path']}")
             media = mastodon.media_post(media_info['local_path'])
+
+            # Wait for the server to finish processing (required before attaching)
+            logger.info("Mastodon: Waiting for media to finish processing...")
+            for attempt in range(30):
+                updated = mastodon.media(media['id'])
+                if updated.get('url'):
+                    logger.info(f"Mastodon: Media ready after {(attempt + 1) * 2}s")
+                    break
+                time.sleep(2)
+            else:
+                logger.warning("Mastodon: Media still processing after 60s, attempting to post anyway")
+
             status = mastodon.status_post(
                 text,
                 media_ids=[media['id']]

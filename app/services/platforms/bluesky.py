@@ -3,7 +3,9 @@ Bluesky (AT Protocol) platform integration
 """
 import logging
 from typing import Dict, Optional
+import httpx
 from atproto import Client
+from atproto_client.request import Request
 
 logger = logging.getLogger(__name__)
 
@@ -21,8 +23,9 @@ def post(media_info: Dict) -> Optional[str]:
     try:
         from app.config import settings
         
-        # Initialize Bluesky client
-        client = Client()
+        # Initialize Bluesky client with extended timeout for video uploads
+        request = Request(timeout=httpx.Timeout(120.0, connect=30.0))
+        client = Client(request=request)
         
         # Login with handle or username
         handle = settings.bluesky.handle or settings.bluesky.username
@@ -47,6 +50,27 @@ def post(media_info: Dict) -> Optional[str]:
                 text=text,
                 image=image_data,
                 image_alt=text[:100] if text else "Image"  # Alt text from caption
+            )
+        elif media_info['type'] == 'video' and media_info.get('local_path'):
+            logger.info(f"Bluesky: Uploading video from {media_info['local_path']}")
+            with open(media_info['local_path'], 'rb') as f:
+                video_data = f.read()
+            
+            # Build aspect ratio if dimensions are available
+            video_aspect_ratio = None
+            if media_info.get('width') and media_info.get('height'):
+                from atproto import models
+                video_aspect_ratio = models.AppBskyEmbedDefs.AspectRatio(
+                    width=media_info['width'],
+                    height=media_info['height'],
+                )
+            
+            # Send post with video
+            response = client.send_video(
+                text=text,
+                video=video_data,
+                video_alt=text[:100] if text else "Video",
+                video_aspect_ratio=video_aspect_ratio,
             )
         else:
             # Text-only post
