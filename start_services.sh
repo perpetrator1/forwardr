@@ -14,9 +14,17 @@ if pgrep -f "uvicorn app.main:app" > /dev/null; then
     echo "  ⚠️  FastAPI server already running"
 else
     .venv/bin/python -m uvicorn app.main:app --reload --port 8000 > logs/server.log 2>&1 &
-    sleep 2
     echo "  ✅ Started FastAPI server (port 8000)"
 fi
+
+# Wait up to 15 seconds for server to become healthy
+echo "  ⏳ Waiting for server to be ready..."
+for i in $(seq 1 15); do
+    if curl -s http://localhost:8000/health > /dev/null 2>&1; then
+        break
+    fi
+    sleep 1
+done
 
 # Check server health
 if curl -s http://localhost:8000/health > /dev/null 2>&1; then
