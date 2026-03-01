@@ -1,25 +1,24 @@
-"""
-Cloudinary Configuration for Threads Media Upload
-
-This module configures Cloudinary for uploading media that will be posted to Threads.
-Threads requires media to be publicly accessible via URL, and Cloudinary is a reliable option.
+"""Cloudinary integration for hosting media that Threads requires at public URLs.
 
 Setup:
-1. Sign up at https://cloudinary.com/ (free tier available)
-2. Get your credentials from the dashboard
-3. Add to .env:
-   CLOUDINARY_CLOUD_NAME=your_cloud_name
-   CLOUDINARY_API_KEY=your_api_key
-   CLOUDINARY_API_SECRET=your_api_secret
-4. Import and use this module in threads.py
+    1. Sign up at https://cloudinary.com/ (free tier available)
+    2. Add ``CLOUDINARY_CLOUD_NAME``, ``CLOUDINARY_API_KEY``, and
+       ``CLOUDINARY_API_SECRET`` to your ``.env`` file.
 """
-import os
 import logging
+import os
+from pathlib import Path
 from typing import Optional
+
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
-# Check if cloudinary is available
+# Ensure .env is loaded so Cloudinary credentials are in os.environ.
+_ENV_PATH = Path(__file__).parent.parent.parent / ".env"
+load_dotenv(dotenv_path=_ENV_PATH)
+
+# Check if cloudinary is installed.
 try:
     import cloudinary
     import cloudinary.uploader
@@ -28,25 +27,19 @@ except ImportError:
     CLOUDINARY_AVAILABLE = False
     logger.warning(
         "Cloudinary not available. Install with: pip install cloudinary\n"
-        "Media posts to Threads will be converted to text-only."
+        "Media posts to Threads will be text-only."
     )
 
 
 def configure_cloudinary() -> bool:
-    """
-    Configure Cloudinary using environment variables
-    
+    """Configure Cloudinary from environment variables.
+
     Returns:
-        True if configured successfully, False otherwise
+        ``True`` if configured successfully, ``False`` otherwise.
     """
     if not CLOUDINARY_AVAILABLE:
         return False
-    
-    # Ensure .env is loaded
-    from pathlib import Path
-    from dotenv import load_dotenv
-    load_dotenv(dotenv_path=Path(__file__).parent.parent.parent / ".env")
-    
+
     cloud_name = os.getenv('CLOUDINARY_CLOUD_NAME')
     api_key = os.getenv('CLOUDINARY_API_KEY')
     api_secret = os.getenv('CLOUDINARY_API_SECRET')
