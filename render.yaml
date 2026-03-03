@@ -42,11 +42,9 @@ services:
         sync: false
       - key: MASTODON_ACCESS_TOKEN
         sync: false
-      - key: INSTAGRAM_USERNAME
+      - key: INSTAGRAM_ACCESS_TOKEN
         sync: false
-      - key: INSTAGRAM_PASSWORD
-        sync: false
-      - key: INSTAGRAM_SESSION_FILE
+      - key: INSTAGRAM_BUSINESS_ACCOUNT_ID
         sync: false
       - key: THREADS_ACCESS_TOKEN
         sync: false

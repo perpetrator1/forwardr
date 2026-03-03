@@ -103,23 +103,23 @@ class MastodonSettings(BaseSettings):
 
 
 class InstagramSettings(BaseSettings):
-    """Instagram configuration"""
+    """Instagram configuration (Graph API for Professional accounts)"""
     model_config = SettingsConfigDict(env_prefix="INSTAGRAM_")
     
-    username: Optional[str] = Field(default=None)
-    password: Optional[str] = Field(default=None)
+    access_token: Optional[str] = Field(default=None)
+    business_account_id: Optional[str] = Field(default=None)
     
     def is_complete(self) -> bool:
         """Check if all required credentials are present"""
-        return bool(self.username and self.password)
+        return bool(self.access_token and self.business_account_id)
     
     def get_missing_fields(self) -> List[str]:
         """Return list of missing required fields"""
         missing = []
-        if not self.username:
-            missing.append("INSTAGRAM_USERNAME")
-        if not self.password:
-            missing.append("INSTAGRAM_PASSWORD")
+        if not self.access_token:
+            missing.append("INSTAGRAM_ACCESS_TOKEN")
+        if not self.business_account_id:
+            missing.append("INSTAGRAM_BUSINESS_ACCOUNT_ID")
         return missing
 
 
