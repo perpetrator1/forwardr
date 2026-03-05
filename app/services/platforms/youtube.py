@@ -1,51 +1,31 @@
 """
 YouTube platform integration
+
+TODO: Implement actual posting using the Google API client.
 """
 import logging
-from typing import Dict
+from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
 
-def post(media_info: Dict) -> bool:
+def post(media_info: Dict) -> Optional[str]:
     """
-    Post content to YouTube
-    
+    Post content to YouTube.
+
     Args:
-        media_info: MediaInfo dictionary
-        
+        media_info: MediaInfo dictionary.
+
     Returns:
-        True if post succeeded
+        Video URL if successful, None if failed.
     """
     try:
         from app.config import settings
-        
+
         # TODO: Implement YouTube posting with Google API
-        # from googleapiclient.discovery import build
-        # from google.oauth2.credentials import Credentials
-        # 
-        # credentials = Credentials.from_authorized_user_file(
-        #     settings.youtube.credentials_file
-        # )
-        # youtube = build('youtube', 'v3', credentials=credentials)
-        # 
-        # if media_info['type'] == 'video':
-        #     request = youtube.videos().insert(
-        #         part='snippet,status',
-        #         body={
-        #             'snippet': {
-        #                 'title': media_info.get('caption', '')[:100],
-        #                 'description': media_info.get('caption'),
-        #             },
-        #             'status': {'privacyStatus': 'public'}
-        #         },
-        #         media_body=media_info['local_path']
-        #     )
-        #     request.execute()
-        
         logger.info(f"YouTube: Would post {media_info.get('type')}")
-        return True
-        
+        return "https://youtube.com"
+
     except Exception as e:
         logger.error(f"YouTube posting failed: {e}")
-        return False
+        return None

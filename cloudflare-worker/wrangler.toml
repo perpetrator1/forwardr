@@ -2,12 +2,22 @@ name = "forwardr-webhook"
 main = "index.js"
 compatibility_date = "2024-01-01"
 
-# Environment variables and secrets are set via Wrangler
 [vars]
-# RENDER_URL = "https://forwardr.onrender.com"
-# API_KEY = "your-secret-key"
+RENDER_URL = "https://httpbin.org/anything"
+API_KEY = "test-api-key-change-in-production"
+TELEGRAM_OWNER_ID = ""
+TELEGRAM_BOT_TOKEN = ""
 
 [[kv_namespaces]]
 binding = "FAILED_UPDATES"
 id = "REPLACE_WITH_KV_ID"
 preview_id = "REPLACE_WITH_PREVIEW_KV_ID"
+
+[[kv_namespaces]]
+binding = "CREDENTIALS"
+id = "REPLACE_WITH_CREDENTIALS_KV_ID"
+preview_id = "REPLACE_WITH_CREDENTIALS_PREVIEW_KV_ID"
+
+# Cron trigger: process the queue every 5 hours
+[triggers]
+crons = ["0 */5 * * *"]

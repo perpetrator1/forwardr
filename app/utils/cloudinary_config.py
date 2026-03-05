@@ -97,7 +97,7 @@ def upload_media(file_path: str, resource_type: str = 'auto') -> Optional[str]:
         result = cloudinary.uploader.upload(
             file_path,
             resource_type=resource_type,
-            folder='threads',  # Organize in a folder
+            folder='forwardr',  # Organize in a folder
             transformation={
                 'quality': 'auto',  # Auto-optimize quality
                 'fetch_format': 'auto'  # Auto-select best format

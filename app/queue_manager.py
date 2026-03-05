@@ -5,7 +5,6 @@ import json
 import sqlite3
 import logging
 import threading
-import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -18,20 +17,21 @@ logger = logging.getLogger(__name__)
 
 
 class QueueManager:
-    """Manage job queue with SQLite backend"""
+    """Manage job queue with SQLite backend.
     
-    def __init__(self, db_path: str = "./forwardr.db", check_interval: int = 60):
+    Jobs are processed on-demand via process_next_job() rather than
+    a background thread.  The Cloudflare Worker cron calls the
+    /process-queue endpoint which invokes this.
+    """
+    
+    def __init__(self, db_path: str = "./forwardr.db"):
         """
         Initialize queue manager
         
         Args:
             db_path: Path to SQLite database
-            check_interval: Seconds between queue checks
         """
         self.db_path = db_path
-        self.check_interval = check_interval
-        self._processor_thread = None
-        self._processor_running = False
         self._lock = threading.Lock()
         
         # Initialize database
@@ -163,6 +163,52 @@ class QueueManager:
             jobs = [dict(row) for row in cursor.fetchall()]
             
         return jobs
+
+    def get_oldest_pending_job(self) -> Optional[Dict]:
+        """
+        Get the single oldest pending job that is ready to process.
+        Used by the /process-queue endpoint for cron-driven processing.
+        
+        Returns:
+            Job dictionary or None
+        """
+        now = datetime.utcnow().isoformat()
+        
+        with self._get_connection() as conn:
+            cursor = conn.execute("""
+                SELECT * FROM jobs 
+                WHERE status = 'pending' 
+                AND scheduled_time <= ?
+                ORDER BY scheduled_time ASC
+                LIMIT 1
+            """, (now,))
+            
+            row = cursor.fetchone()
+        
+        return dict(row) if row else None
+
+    def process_next_job(self) -> Dict:
+        """
+        Get and process the oldest pending job.
+        
+        Returns:
+            Result dict with status, job_id, platform, and message
+        """
+        job = self.get_oldest_pending_job()
+        
+        if not job:
+            self._cleanup_completed_media()
+            return {"status": "idle", "message": "No pending jobs"}
+        
+        success = self.process_job(job)
+        self._cleanup_completed_media()
+        
+        return {
+            "status": "completed" if success else "failed",
+            "job_id": job["id"],
+            "platform": job["platform"],
+            "message": f"Job #{job['id']} for {job['platform']} {'completed' if success else 'failed'}",
+        }
     
     def update_job_status(
         self, 
@@ -294,35 +340,6 @@ class QueueManager:
             
             return False
     
-    def _processor_loop(self):
-        """Background processor loop"""
-        logger.info("Queue processor started")
-        
-        while self._processor_running:
-            try:
-                # Get pending jobs
-                jobs = self.get_pending_jobs()
-                
-                if jobs:
-                    logger.info(f"Found {len(jobs)} pending jobs to process")
-                    
-                    for job in jobs:
-                        if not self._processor_running:
-                            break
-                        
-                        self.process_job(job)
-                
-                # Check for cleanup
-                self._cleanup_completed_media()
-                
-            except Exception as e:
-                logger.error(f"Error in processor loop: {e}")
-            
-            # Sleep for check interval
-            time.sleep(self.check_interval)
-        
-        logger.info("Queue processor stopped")
-    
     def _cleanup_completed_media(self):
         """
         Clean up media files for jobs where all platforms are complete
@@ -345,7 +362,6 @@ class QueueManager:
             
         for file_id in completed_file_ids:
             try:
-                # Check if we already cleaned this up
                 with self._get_connection() as conn:
                     cursor = conn.execute("""
                         SELECT media_info FROM jobs 
@@ -361,42 +377,12 @@ class QueueManager:
                     media_info = MediaInfo(**media_info_dict)
                     
                     if media_info.local_path and Path(media_info.local_path).exists():
-                        # Clean up the file
                         handler = MediaHandler(bot_token="", media_dir="./media")
                         handler.cleanup_media(media_info)
                         logger.info(f"Cleaned up media for file_id: {file_id}")
                         
             except Exception as e:
                 logger.error(f"Failed to cleanup file_id {file_id}: {e}")
-    
-    def start_processor(self):
-        """Start the background processor thread"""
-        if self._processor_running:
-            logger.warning("Processor already running")
-            return
-        
-        self._processor_running = True
-        self._processor_thread = threading.Thread(
-            target=self._processor_loop,
-            daemon=True,
-            name="QueueProcessor"
-        )
-        self._processor_thread.start()
-        logger.info("Queue processor thread started")
-    
-    def stop_processor(self):
-        """Stop the background processor thread"""
-        if not self._processor_running:
-            logger.warning("Processor not running")
-            return
-        
-        logger.info("Stopping queue processor...")
-        self._processor_running = False
-        
-        if self._processor_thread:
-            self._processor_thread.join(timeout=10)
-        
-        logger.info("Queue processor stopped")
     
     def get_queue_status(self) -> Dict[str, int]:
         """
@@ -536,13 +522,12 @@ _queue_manager = None
 
 
 def get_queue_manager(
-    db_path: str = "./forwardr.db", 
-    check_interval: int = 60
+    db_path: str = "./forwardr.db",
 ) -> QueueManager:
     """Get or create queue manager singleton"""
     global _queue_manager
     
     if _queue_manager is None:
-        _queue_manager = QueueManager(db_path, check_interval)
+        _queue_manager = QueueManager(db_path)
     
     return _queue_manager

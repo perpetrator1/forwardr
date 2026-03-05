@@ -1,11 +1,13 @@
 # Forwardr - Social Media Automation System
 
-Automate your social media posting across multiple platforms with a single message to a Telegram bot. Posts are queued and published with a 1-hour delay between each platform.
+Automate your social media posting across multiple platforms with a single message to a Telegram bot. Posts are queued and published via a cron-triggered schedule.
 
 ## Features
 
 - Send media to a Telegram bot to trigger automated posting
-- Automatic queuing with 1-hour delay between posts
+- **Owner-only** — only your Telegram account can use the bot
+- **Cron-based queue** — Cloudflare Worker wakes the server every 5 hours to post the oldest queued item
+- **Telegram credential management** — set platform credentials via bot commands, stored in Cloudflare KV
 - Multi-platform support:
   - Telegram Channel
   - Bluesky
@@ -23,14 +25,33 @@ Automate your social media posting across multiple platforms with a single messa
 ## Architecture
 
 ```
-[Telegram Bot] → [Cloudflare Worker] → [FastAPI Backend on Render]
-                                              ↓
-                                        [SQLite Queue]
-                                              ↓
-                                      [Background Worker]
-                                              ↓
-                                    [Platform Publishers]
+                          ┌───────────────────────┐
+                          │   Cloudflare Worker    │
+                          │                       │
+[Telegram Bot] ──webhook──▶  • Owner-only filter  │
+                          │  • Bot commands        │──────▶ Cloudflare KV
+                          │    (/setcred, /help…) │         (credentials)
+                          │  • Forward media       │
+                          │  • Cron (every 5h)     │
+                          └──────┬────────────┬────┘
+                                 │            │
+                          /webhook      /process-queue
+                                 │            │
+                          ┌──────▼────────────▼────┐
+                          │  FastAPI on Render.com  │
+                          │                        │
+                          │  • Queue media (SQLite) │
+                          │  • Process oldest job   │
+                          │  • Post to platforms    │
+                          └────────────────────────┘
 ```
+
+**Flow:**
+1. You send a photo/video/text to the Telegram bot
+2. Cloudflare Worker checks you're the owner, forwards to Render
+3. FastAPI downloads the media and queues jobs for all enabled platforms
+4. Every 5 hours, the CF Worker cron wakes the server and triggers `/process-queue`
+5. The server processes the oldest pending job and posts to that platform
 
 ## Prerequisites
 
@@ -67,11 +88,12 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Edit `.env` and fill in your credentials for each platform you want to use. At minimum, you need:
+Edit `.env` and fill in your credentials. At minimum, you need:
 
 - `TELEGRAM_BOT_TOKEN` - Create a bot via [@BotFather](https://t.me/botfather)
+- `TELEGRAM_OWNER_ID` - Your Telegram user ID (send `/start` to [@userinfobot](https://t.me/userinfobot))
 - `API_SECRET_KEY` - Generate a secure random string
-- Platform-specific credentials for each service you want to use
+- `CLOUDFLARE_WORKER_URL` - Your deployed worker URL
 
 ### 5. Initialize Database
 
@@ -93,10 +115,22 @@ The API will be available at `http://localhost:8000`
 cd cloudflare-worker
 npm install -g wrangler
 wrangler login
+
+# Create the KV namespaces
+wrangler kv namespace create FAILED_UPDATES
+wrangler kv namespace create CREDENTIALS
+
+# Update wrangler.toml with the returned KV IDs, then:
 wrangler deploy
 ```
 
-Note the deployed worker URL and add it to your `.env` as `CLOUDFLARE_WORKER_URL`.
+Set secrets (not stored in `wrangler.toml`):
+```bash
+wrangler secret put RENDER_URL        # Your Render service URL
+wrangler secret put API_KEY           # Same as API_SECRET_KEY
+wrangler secret put TELEGRAM_OWNER_ID # Your numeric Telegram user ID
+wrangler secret put TELEGRAM_BOT_TOKEN # Your bot token
+```
 
 ### 8. Deploy to Render.com
 
@@ -111,11 +145,31 @@ Note the deployed worker URL and add it to your `.env` as `CLOUDFLARE_WORKER_URL
 
 ### 9. Set Up Telegram Bot Webhook
 
-After deploying to Render, set the webhook for your Telegram bot:
+After deploying, point the Telegram webhook to your CF Worker:
 
 ```bash
 curl -X POST "https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook?url=<YOUR_CLOUDFLARE_WORKER_URL>"
 ```
+
+## Telegram Bot Commands
+
+Once the bot is running, send these commands via Telegram:
+
+| Command | Description |
+|---------|-------------|
+| `/setcred <platform> <key> <value>` | Save a platform credential |
+| `/delcred <platform> <key>` | Delete a credential |
+| `/getcreds` | List configured platforms & missing fields |
+| `/status` | Show server & queue status |
+| `/help` | Show all commands |
+
+**Example — setting up Bluesky:**
+```
+/setcred bluesky handle your-handle.bsky.social
+/setcred bluesky password xxxx-xxxx-xxxx-xxxx
+```
+
+Credentials are stored in Cloudflare KV (persistent, encrypted at rest by Cloudflare). Environment variables in `.env` or Render always take precedence over KV values.
 
 ## Platform Setup Guides
 
@@ -172,8 +226,6 @@ CLOUDINARY_API_SECRET=your_secret
 
 **Rate Limits:** 250 posts per 24 hours, 500 character limit per post
 
-
-
 ### Twitter/X
 
 1. Apply for developer access: [developer.twitter.com](https://developer.twitter.com)
@@ -196,16 +248,17 @@ CLOUDINARY_API_SECRET=your_secret
 ## Usage
 
 1. Send a photo, video, or document to your Telegram bot
-2. Include a caption (optional) - this will be the post text
+2. Include a caption (optional) — this will be the post text
 3. The bot will queue the post for all configured platforms
-4. Posts will be published with a 1-hour delay between each platform
+4. The cron trigger processes one queued post every 5 hours
 
 ## API Endpoints
 
 - `POST /webhook` - Receives webhooks from Cloudflare Worker
+- `POST /process-queue` - Process the oldest pending job (cron-triggered)
 - `GET /health` - Health check endpoint
-- `GET /queue` - View current job queue (requires API key)
-- `GET /jobs/{job_id}` - Get job status (requires API key)
+- `GET /queue` - View current job queue
+- `DELETE /queue/{job_id}` - Cancel a pending job
 
 ## Database Schema
 
@@ -213,11 +266,13 @@ CLOUDINARY_API_SECRET=your_secret
 - `id` - Unique job identifier
 - `status` - Job status (pending, processing, completed, failed)
 - `platform` - Target platform
-- `media_url` - URL to media file
-- `caption` - Post caption/text
+- `media_info` - Serialised media info JSON
 - `scheduled_time` - When to publish
 - `created_at` - Job creation timestamp
-- `retries` - Number of retry attempts
+- `attempts` - Number of retry attempts
+- `error_log` - Error messages from failed attempts
+- `file_id` - Telegram file ID (for cleanup tracking)
+- `post_url` - URL of the published post
 
 ## Configuration
 

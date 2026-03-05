@@ -1,13 +1,22 @@
 """
-Configuration management using Pydantic Settings
+Configuration management using Pydantic Settings.
+
+Credentials are resolved in this order (higher wins):
+1. Environment variables / .env file
+2. Cloudflare Worker KV (fetched via CLOUDFLARE_WORKER_URL/credentials)
 """
 import os
 from pathlib import Path
-from typing import Optional, List
+from typing import Any, Dict, Optional, List
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from dotenv import load_dotenv
 import logging
+
+try:
+    import httpx
+except ImportError:
+    httpx = None  # type: ignore
 
 # Load environment variables
 env_path = Path(__file__).parent.parent / ".env"
@@ -44,6 +53,7 @@ class TelegramSettings(BaseSettings):
     
     bot_token: Optional[str] = Field(default=None)
     chat_id: Optional[str] = Field(default=None)
+    owner_id: Optional[str] = Field(default=None)
     
     def is_complete(self) -> bool:
         """Check if all required credentials are present"""
@@ -234,7 +244,85 @@ class YouTubeSettings(BaseSettings):
         return missing
 
 
+# ---------------------------------------------------------------------------
+# KV credential fetching
+# ---------------------------------------------------------------------------
+
+# Maps KV key names → Pydantic field names for each platform.
+# KV stores e.g. cred:bluesky:handle → value  and the Pydantic field is `handle`.
+_KV_FIELD_MAP: Dict[str, Dict[str, str]] = {
+    "telegram": {"bot_token": "bot_token", "chat_id": "chat_id"},
+    "bluesky": {"handle": "handle", "password": "password", "username": "username"},
+    "mastodon": {"instance_url": "instance_url", "access_token": "access_token"},
+    "instagram": {"access_token": "access_token", "business_account_id": "business_account_id"},
+    "threads": {"access_token": "access_token", "user_id": "user_id"},
+    "twitter": {
+        "api_key": "api_key", "api_secret": "api_secret",
+        "access_token": "access_token", "access_token_secret": "access_token_secret",
+        "bearer_token": "bearer_token",
+    },
+    "reddit": {
+        "client_id": "client_id", "client_secret": "client_secret",
+        "username": "username", "password": "password",
+        "user_agent": "user_agent", "subreddit": "subreddit",
+        "default_title": "default_title",
+    },
+    "youtube": {"client_secrets_file": "client_secrets_file", "token_file": "token_file"},
+}
+
+
+def _fetch_kv_credentials() -> Dict[str, Dict[str, str]]:
+    """
+    Fetch credentials from the Cloudflare Worker /credentials endpoint.
+    Returns {platform: {key: value}} or empty dict on failure.
+    
+    Set FORWARDR_SKIP_KV_FETCH=1 in tests to skip the network call.
+    """
+    if os.getenv("FORWARDR_SKIP_KV_FETCH", ""):
+        return {}
+
+    worker_url = os.getenv("CLOUDFLARE_WORKER_URL", "").rstrip("/")
+    api_key = os.getenv("API_SECRET_KEY", "")
+
+    if not worker_url or not api_key:
+        logger.debug("No CLOUDFLARE_WORKER_URL or API_SECRET_KEY — skipping KV fetch")
+        return {}
+
+    if httpx is None:
+        logger.debug("httpx not installed — skipping KV credential fetch")
+        return {}
+
+    url = f"{worker_url}/credentials"
+    try:
+        resp = httpx.get(url, headers={"X-API-Key": api_key}, timeout=3)
+        if resp.status_code != 200:
+            logger.warning(f"KV credential fetch returned {resp.status_code}")
+            return {}
+        return resp.json()
+    except Exception as e:
+        logger.warning(f"Failed to fetch KV credentials: {e}")
+        return {}
+
+
+def _merge_kv_into_settings(platform_obj: Any, kv_creds: Dict[str, str], field_map: Dict[str, str]) -> None:
+    """
+    For each key in kv_creds, if the corresponding Pydantic field is
+    currently empty/None, set it from KV.  Env vars always win.
+    """
+    for kv_key, field_name in field_map.items():
+        kv_value = kv_creds.get(kv_key)
+        if not kv_value:
+            continue
+        current = getattr(platform_obj, field_name, None)
+        if not current:  # Only fill if env didn't already set it
+            setattr(platform_obj, field_name, kv_value)
+            logger.debug(f"Set {field_name} from KV")
+
+
+# ---------------------------------------------------------------------------
 # Main Settings Class
+# ---------------------------------------------------------------------------
+
 class Settings:
     """Main settings container with platform validation"""
     
@@ -242,7 +330,7 @@ class Settings:
         # Initialize core settings
         self.core = CoreSettings()
         
-        # Initialize platform settings
+        # Initialize platform settings (from env/.env)
         self.telegram = TelegramSettings()
         self.bluesky = BlueskySettings()
         self.mastodon = MastodonSettings()
@@ -264,8 +352,25 @@ class Settings:
             "youtube": self.youtube,
         }
         
+        # Merge in credentials from Cloudflare KV (env vars take precedence)
+        self._merge_kv_credentials()
+        
         # Validate and set enabled platforms
         self.enabled_platforms = self._validate_platforms()
+    
+    def _merge_kv_credentials(self) -> None:
+        """Fetch credentials from CF Worker KV and fill in any blanks."""
+        kv_creds = _fetch_kv_credentials()
+        if not kv_creds:
+            return
+        
+        logger.info(f"Merging KV credentials for platforms: {', '.join(kv_creds.keys())}")
+        
+        for platform_name, platform_obj in self._platforms.items():
+            platform_kv = kv_creds.get(platform_name, {})
+            field_map = _KV_FIELD_MAP.get(platform_name, {})
+            if platform_kv and field_map:
+                _merge_kv_into_settings(platform_obj, platform_kv, field_map)
     
     def _validate_platforms(self) -> List[str]:
         """
@@ -286,7 +391,7 @@ class Settings:
                 )
         
         if not enabled:
-            logger.warning("No platforms are configured! Please add credentials to .env file")
+            logger.warning("No platforms are configured! Add credentials via /setcred or .env")
         else:
             logger.info(f"Total enabled platforms: {len(enabled)}/{len(self._platforms)}")
         
