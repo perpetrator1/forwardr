@@ -280,7 +280,7 @@ async function handleCommand(env, chatId, text) {
 
     case "/start": {
       return (
-        "Wassup Twin" +
+        "Wassup Twin\n\n" +
         "Send me a photo, video, or text and I'll post it to all your configured platforms at once.\n\n" +
         "Use /help to see all available commands."
       );
