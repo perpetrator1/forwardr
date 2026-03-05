@@ -86,3 +86,5 @@ services:
         sync: false
       - key: LOG_FILE_PATH
         sync: false
+      - key: PYTHON_VERSION
+        value: 3.11.8

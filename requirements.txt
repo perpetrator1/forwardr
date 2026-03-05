@@ -21,7 +21,7 @@ sqlalchemy==2.0.25
 apscheduler==3.10.4
 
 # Image/Video processing
-pillow==10.2.0
+pillow>=10.2.0
 python-magic==0.4.27
 
 # Telegram
