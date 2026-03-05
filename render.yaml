@@ -1,13 +1,12 @@
 services:
   - type: web
     name: forwardr
-    env: python
+    runtime: docker
     plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    dockerfilePath: ./Dockerfile
     disk:
       name: media-disk
-      mountPath: /media
+      mountPath: /app/media
       sizeGB: 1
     envVars:
       - key: ENVIRONMENT
@@ -86,5 +85,3 @@ services:
         sync: false
       - key: LOG_FILE_PATH
         sync: false
-      - key: PYTHON_VERSION
-        value: 3.11.8
