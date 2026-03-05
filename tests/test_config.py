@@ -114,8 +114,8 @@ def print_env_file_status():
     """Check and print .env file status"""
     print_section("ENVIRONMENT FILE")
     
-    env_path = Path(__file__).parent / ".env"
-    env_example_path = Path(__file__).parent / ".env.example"
+    env_path = Path(__file__).parent.parent / ".env"
+    env_example_path = Path(__file__).parent.parent / ".env.example"
     
     if env_path.exists():
         print(f".env file found: {env_path}")

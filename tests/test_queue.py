@@ -89,13 +89,12 @@ def create_test_jobs(queue_manager: QueueManager, interval_seconds: int = 5):
         media_info=media_info,
         platforms=platforms,
         start_delay_minutes=0,
-        interval_minutes=interval_seconds / 60  # Convert seconds to minutes
+        interval_minutes=0  # Run immediately in tests
     )
     
     print(f"Created {len(job_ids)} jobs:")
     for i, (platform, job_id) in enumerate(zip(platforms, job_ids)):
-        delay = i * interval_seconds
-        print(f"  • Job #{job_id:3d} - {platform:12} (scheduled in {delay}s)")
+        print(f"  • Job #{job_id:3d} - {platform:12} (scheduled immediately)")
     
     print()
     return job_ids
@@ -110,9 +109,9 @@ def monitor_queue(queue_manager: QueueManager, check_interval: int = 5, max_iter
         check_interval: Seconds between status checks
         max_iterations: Maximum monitoring iterations
     """
-    print_section("MONITORING QUEUE")
+    print_section("PROCESSING QUEUE")
     
-    print(f"Checking status every {check_interval} seconds...")
+    print(f"Checking for and processing jobs every {check_interval} seconds...")
     print(f"(Will stop when all jobs are complete or after {max_iterations} checks)")
     print()
     
@@ -121,12 +120,19 @@ def monitor_queue(queue_manager: QueueManager, check_interval: int = 5, max_iter
     while iteration < max_iterations:
         iteration += 1
         
+        # Attempt to process the oldest job
+        result = queue_manager.process_next_job()
+        
         # Get current status
         status = queue_manager.get_queue_status()
         
         # Print status
         timestamp = datetime.now().strftime("%H:%M:%S")
-        print(f"[{timestamp}] Check #{iteration}")
+        if result["status"] != "idle":
+            print(f"[{timestamp}] Processed: {result['message']}")
+        else:
+            print(f"[{timestamp}] Idle (no jobs scheduled yet)")
+            
         print_status_table(status)
         
         # Check if all jobs are done
@@ -134,9 +140,9 @@ def monitor_queue(queue_manager: QueueManager, check_interval: int = 5, max_iter
             print("All jobs completed!")
             break
         
-        # Wait for next check
-        if iteration < max_iterations:
-            time.sleep(check_interval)
+        # Wait for next check if no job was processed
+        if result["status"] == "idle" and iteration < max_iterations:
+            time.sleep(1)
     
     if iteration >= max_iterations:
         print("WARNING: Maximum iterations reached, stopping monitor")
@@ -204,51 +210,44 @@ def test_queue_system():
     
     # Create queue manager
     queue_manager = QueueManager(
-        db_path=db_path,
-        check_interval=check_interval_seconds
+        db_path=db_path
     )
     
-    # Create test jobs (scheduled 5 seconds apart)
-    job_ids = create_test_jobs(queue_manager, interval_seconds=5)
+    # Mock the platform module loading so we don't actually post
+    from unittest.mock import patch, MagicMock
     
-    # Show initial status
-    print_section("INITIAL STATUS")
-    status = queue_manager.get_queue_status()
-    print_status_table(status)
-    
-    # Start the processor
-    print_section("STARTING PROCESSOR")
-    print("Starting background processor thread...")
-    queue_manager.start_processor()
-    print("Processor started")
-    print()
-    
-    # Monitor progress
-    try:
-        monitor_queue(queue_manager, check_interval=5, max_iterations=20)
+    with patch("app.services.platforms.post_to_platform", return_value="https://example.com/mock_post"):
+        # Create test jobs (scheduled 5 seconds apart)
+        job_ids = create_test_jobs(queue_manager, interval_seconds=5)
         
-        # Show final job details
-        show_job_details(queue_manager)
+        # Show initial status
+        print_section("INITIAL STATUS")
+        status = queue_manager.get_queue_status()
+        print_status_table(status)
         
-        # Final status
-        print_section("FINAL STATUS")
-        final_status = queue_manager.get_queue_status()
-        print_status_table(final_status)
-        
-        # Test purge function
-        print_section("TESTING PURGE FUNCTION")
-        print("Testing purge of old jobs (simulated)...")
-        deleted = queue_manager.purge_old_jobs(days=7)
-        print(f"Purge function executed (deleted {deleted} jobs)")
-        print()
-        
-    finally:
-        # Stop the processor
-        print_section("CLEANUP")
-        print("Stopping processor...")
-        queue_manager.stop_processor()
-        print("Processor stopped")
-        print()
+        # Monitor progress
+        try:
+            monitor_queue(queue_manager, check_interval=5, max_iterations=20)
+            
+            # Show final job details
+            show_job_details(queue_manager)
+            
+            # Final status
+            print_section("FINAL STATUS")
+            final_status = queue_manager.get_queue_status()
+            print_status_table(final_status)
+            
+            # Test purge function
+            print_section("TESTING PURGE FUNCTION")
+            print("Testing purge of old jobs (simulated)...")
+            deleted = queue_manager.purge_old_jobs(days=7)
+            print(f"Purge function executed (deleted {deleted} jobs)")
+            print()
+            
+        finally:
+            print_section("CLEANUP")
+            print("Test finished.")
+            print()
     
     print_separator("=", 80)
     print("Test completed successfully!")
