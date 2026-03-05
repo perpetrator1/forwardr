@@ -28,7 +28,7 @@ python-magic==0.4.27
 python-telegram-bot==21.0.1
 
 # Bluesky (AT Protocol)
-atproto==0.0.46
+atproto>=0.0.64
 
 # Mastodon
 Mastodon.py==1.8.1
