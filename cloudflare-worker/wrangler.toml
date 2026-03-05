@@ -2,21 +2,13 @@ name = "forwardr-webhook"
 main = "index.js"
 compatibility_date = "2024-01-01"
 
-[vars]
-RENDER_URL = "https://httpbin.org/anything"
-API_KEY = "test-api-key-change-in-production"
-TELEGRAM_OWNER_ID = ""
-TELEGRAM_BOT_TOKEN = ""
-
 [[kv_namespaces]]
 binding = "FAILED_UPDATES"
-id = "REPLACE_WITH_KV_ID"
-preview_id = "REPLACE_WITH_PREVIEW_KV_ID"
+id = "b4a7291fde4c41d58991047216d7affe"
 
 [[kv_namespaces]]
 binding = "CREDENTIALS"
-id = "REPLACE_WITH_CREDENTIALS_KV_ID"
-preview_id = "REPLACE_WITH_CREDENTIALS_PREVIEW_KV_ID"
+id = "f490887adf624e629612fdeddf76212a"
 
 # Cron trigger: process the queue every 5 hours
 [triggers]
