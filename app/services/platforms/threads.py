@@ -78,6 +78,22 @@ def _upload_media_to_public_url(local_path: str) -> Optional[str]:
         return None
 
 
+_TRANSIENT_RETRIES = 3       # total attempts for transient Meta API errors
+_TRANSIENT_RETRY_DELAY = 5   # seconds between retries
+
+
+def _is_transient_error(resp: requests.Response) -> bool:
+    """Check if a Meta API error response indicates a transient (retryable) error."""
+    if resp.status_code < 500:
+        return False
+    try:
+        body = resp.json()
+        return body.get("error", {}).get("is_transient", False)
+    except (ValueError, AttributeError):
+        # 5xx without a parseable body — still worth retrying
+        return resp.status_code >= 500
+
+
 def _create_media_container(
     user_id: str,
     access_token: str,
@@ -98,35 +114,56 @@ def _create_media_container(
     Returns:
         Container ID if successful, None otherwise
     """
-    try:
-        data = {
-            "media_type": "TEXT",
-            "text": text[:500],
-            "access_token": access_token,
-        }
-        if image_url:
-            data.update(media_type="IMAGE", image_url=image_url)
-        elif video_url:
-            data.update(media_type="VIDEO", video_url=video_url)
+    data = {
+        "media_type": "TEXT",
+        "text": text[:500],
+        "access_token": access_token,
+    }
+    if image_url:
+        data.update(media_type="IMAGE", image_url=image_url)
+    elif video_url:
+        data.update(media_type="VIDEO", video_url=video_url)
 
-        resp = requests.post(
-            f"{GRAPH_API_BASE}/{user_id}/threads", data=data, timeout=30
-        )
-        resp.raise_for_status()
+    last_exc = None
+    for attempt in range(1, _TRANSIENT_RETRIES + 1):
+        try:
+            resp = requests.post(
+                f"{GRAPH_API_BASE}/{user_id}/threads", data=data, timeout=30
+            )
 
-        container_id = resp.json().get("id")
-        if container_id:
-            logger.info(f"Threads: Created media container {container_id}")
-            return container_id
+            # Retry on transient 5xx errors
+            if _is_transient_error(resp):
+                logger.warning(
+                    f"Threads: Transient error on attempt {attempt}/{_TRANSIENT_RETRIES} "
+                    f"(HTTP {resp.status_code}), retrying in {_TRANSIENT_RETRY_DELAY}s..."
+                )
+                time.sleep(_TRANSIENT_RETRY_DELAY)
+                continue
 
-        logger.error(f"Threads: No container ID in response: {resp.json()}")
-        return None
-    except requests.exceptions.RequestException as e:
-        _log_api_error("create media container", e)
-        return None
-    except Exception as e:
-        logger.error(f"Threads: Unexpected error creating container: {e}")
-        return None
+            resp.raise_for_status()
+
+            container_id = resp.json().get("id")
+            if container_id:
+                logger.info(f"Threads: Created media container {container_id}")
+                return container_id
+
+            logger.error(f"Threads: No container ID in response: {resp.json()}")
+            return None
+        except requests.exceptions.RequestException as e:
+            last_exc = e
+            _log_api_error("create media container", e)
+            # Only retry on server errors, not client errors like 400/401
+            if hasattr(e, 'response') and e.response is not None and e.response.status_code < 500:
+                return None
+            if attempt < _TRANSIENT_RETRIES:
+                logger.info(f"Threads: Retrying in {_TRANSIENT_RETRY_DELAY}s...")
+                time.sleep(_TRANSIENT_RETRY_DELAY)
+        except Exception as e:
+            logger.error(f"Threads: Unexpected error creating container: {e}")
+            return None
+
+    logger.error(f"Threads: All {_TRANSIENT_RETRIES} attempts to create container failed")
+    return None
 
 
 def _publish_container(
@@ -145,27 +182,46 @@ def _publish_container(
     Returns:
         Post ID if successful, None otherwise
     """
-    try:
-        resp = requests.post(
-            f"{GRAPH_API_BASE}/{user_id}/threads_publish",
-            data={"creation_id": container_id, "access_token": access_token},
-            timeout=30,
-        )
-        resp.raise_for_status()
+    last_exc = None
+    for attempt in range(1, _TRANSIENT_RETRIES + 1):
+        try:
+            resp = requests.post(
+                f"{GRAPH_API_BASE}/{user_id}/threads_publish",
+                data={"creation_id": container_id, "access_token": access_token},
+                timeout=30,
+            )
 
-        post_id = resp.json().get("id")
-        if post_id:
-            logger.info(f"Threads: Published post {post_id}")
-            return post_id
+            if _is_transient_error(resp):
+                logger.warning(
+                    f"Threads: Transient error on publish attempt {attempt}/{_TRANSIENT_RETRIES} "
+                    f"(HTTP {resp.status_code}), retrying in {_TRANSIENT_RETRY_DELAY}s..."
+                )
+                time.sleep(_TRANSIENT_RETRY_DELAY)
+                continue
 
-        logger.error(f"Threads: No post ID in response: {resp.json()}")
-        return None
-    except requests.exceptions.RequestException as e:
-        _log_api_error("publish container", e)
-        return None
-    except Exception as e:
-        logger.error(f"Threads: Unexpected error publishing: {e}")
-        return None
+            resp.raise_for_status()
+
+            post_id = resp.json().get("id")
+            if post_id:
+                logger.info(f"Threads: Published post {post_id}")
+                return post_id
+
+            logger.error(f"Threads: No post ID in response: {resp.json()}")
+            return None
+        except requests.exceptions.RequestException as e:
+            last_exc = e
+            _log_api_error("publish container", e)
+            if hasattr(e, 'response') and e.response is not None and e.response.status_code < 500:
+                return None
+            if attempt < _TRANSIENT_RETRIES:
+                logger.info(f"Threads: Retrying publish in {_TRANSIENT_RETRY_DELAY}s...")
+                time.sleep(_TRANSIENT_RETRY_DELAY)
+        except Exception as e:
+            logger.error(f"Threads: Unexpected error publishing: {e}")
+            return None
+
+    logger.error(f"Threads: All {_TRANSIENT_RETRIES} attempts to publish failed")
+    return None
 
 
 def _log_api_error(action: str, exc: requests.exceptions.RequestException) -> None:
