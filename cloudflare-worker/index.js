@@ -284,6 +284,16 @@ async function handleCommand(env, chatId, text) {
           msg += `\n*Enabled platforms:* ${health.enabled_platforms.join(", ")}`;
         }
 
+        if (health.post_interval_hours !== undefined) {
+          const h = health.post_interval_hours;
+          const display = h === 0 ? "immediate" : h >= 1 ? `${h}h` : `${Math.round(h * 60)}m`;
+          msg += `\n*Post interval:* ${display}`;
+        }
+
+        if (health.next_scheduled) {
+          msg += `\n*Next scheduled:* ${health.next_scheduled} UTC`;
+        }
+
         return msg;
       } catch (e) {
         return "⚠️ Could not reach the server. It may be spinning up — try again in a minute.";
@@ -298,6 +308,41 @@ async function handleCommand(env, chatId, text) {
       );
     }
 
+    case "/setinterval": {
+      // /setinterval <hours>
+      if (parts.length < 2) {
+        return (
+          "❌ *Usage:* `/setinterval <hours>`\n\n" +
+          "*Examples:*\n" +
+          "`/setinterval 5` — post every 5 hours\n" +
+          "`/setinterval 0.5` — post every 30 minutes\n" +
+          "`/setinterval 0` — post immediately (no spacing)\n\n" +
+          "Use `/status` to see the current interval."
+        );
+      }
+
+      const hours = parseFloat(parts[1]);
+      if (isNaN(hours) || hours < 0) {
+        return "❌ Please provide a valid number of hours (e.g., `5` or `0.5`).";
+      }
+
+      if (!env.CREDENTIALS) {
+        return "❌ Credentials KV namespace not configured.";
+      }
+
+      await env.CREDENTIALS.put("config:post_interval_hours", String(hours));
+
+      if (hours === 0) {
+        return "✅ Post interval set to *0* — all posts will go out immediately.";
+      }
+
+      const display =
+        hours >= 1
+          ? `${hours} hour${hours !== 1 ? "s" : ""}`
+          : `${Math.round(hours * 60)} minutes`;
+      return `✅ Post interval set to *${display}*.`;
+    }
+
     case "/help": {
       return (
         "🤖 *Forwardr Bot Commands*\n\n" +
@@ -306,6 +351,8 @@ async function handleCommand(env, chatId, text) {
         "`/setcred <platform> <key> <value>` — Save a credential\n" +
         "`/delcred <platform> <key>` — Delete a credential\n" +
         "`/getcreds` — List configured platforms\n\n" +
+        "⏰ *Scheduling:*\n" +
+        "`/setinterval <hours>` — Set hours between posts (default: 5)\n\n" +
         "📊 *Status:*\n" +
         "`/status` — Show queue & server status\n" +
         "`/help` — Show this help message\n\n" +
@@ -323,17 +370,39 @@ async function handleCommand(env, chatId, text) {
 // Render forwarding
 // ---------------------------------------------------------------------------
 
+/**
+ * Wait for the Render server to become ready (handles free-tier cold starts).
+ * Polls /health with increasing backoff up to ~2 minutes total.
+ */
+async function waitForRender(env) {
+  const healthUrl = `${env.RENDER_URL.replace(/\/$/, "")}/health`;
+  const maxAttempts = 8;
+
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      const resp = await fetch(healthUrl, {
+        signal: AbortSignal.timeout(10000),
+      });
+      if (resp.ok) return; // Server is ready
+    } catch {
+      // timeout or network error — server still spinning up
+    }
+    // Linear backoff: 5s, 10s, 15s, 20s … (~2.5 min total)
+    await new Promise((r) => setTimeout(r, 5000 * (i + 1)));
+  }
+
+  throw new Error("Render server did not become ready after retries");
+}
+
 async function forwardToRender(env, payload) {
   if (!env.RENDER_URL || !env.API_KEY) {
     throw new Error("Missing RENDER_URL or API_KEY secrets");
   }
 
-  const wakeUrl = env.RENDER_URL;
+  // Wait for server to be ready (handles cold starts)
+  await waitForRender(env);
+
   const webhookUrl = `${env.RENDER_URL.replace(/\/$/, "")}/webhook`;
-
-  // Wake the server
-  await fetch(wakeUrl, { method: "GET" });
-
   const response = await fetch(webhookUrl, {
     method: "POST",
     headers: {
@@ -354,7 +423,7 @@ async function triggerQueueProcessing(env) {
     throw new Error("Missing RENDER_URL or API_KEY secrets");
   }
 
-  await fetch(env.RENDER_URL, { method: "GET" });
+  await waitForRender(env);
 
   const processUrl = `${env.RENDER_URL.replace(/\/$/, "")}/process-queue`;
   const response = await fetch(processUrl, {
@@ -453,6 +522,13 @@ export default {
       }
 
       const creds = await getAllCredentials(env.CREDENTIALS);
+
+      // Include config values alongside credentials
+      const interval = await env.CREDENTIALS.get("config:post_interval_hours");
+      creds._config = {
+        post_interval_hours: interval !== null ? parseFloat(interval) : 5,
+      };
+
       return new Response(JSON.stringify(creds), {
         status: 200,
         headers: { "Content-Type": "application/json" },
@@ -516,14 +592,17 @@ export default {
       (async () => {
         try {
           await forwardToRender(env, payload);
-          // Also trigger immediate queue processing so posts go out now
-          // instead of waiting for the next cron cycle
+          // Server is now awake — replay any previously failed updates
           try {
-            await triggerQueueProcessing(env);
-          } catch (qErr) {
-            console.error("Immediate queue processing failed (will retry on cron):", qErr.message);
+            const replay = await replayFailed(env);
+            if (replay.replayed > 0) {
+              console.log(`Replayed ${replay.replayed} previously failed updates`);
+            }
+          } catch (e) {
+            console.error("Failed replay:", e.message);
           }
         } catch (err) {
+          console.error("Forward to Render failed:", err.message);
           await storeFailed(env, updateId, payload);
         }
       })()
@@ -539,10 +618,17 @@ export default {
     ctx.waitUntil(
       (async () => {
         try {
+          // Replay any failed updates first
+          const replay = await replayFailed(env);
+          if (replay.replayed > 0) {
+            console.log(`Replayed ${replay.replayed} failed updates`);
+          }
+
+          // Process all due jobs
           const result = await triggerQueueProcessing(env);
           console.log("Queue processing result:", JSON.stringify(result));
         } catch (err) {
-          console.error("Queue processing failed:", err.message);
+          console.error("Scheduled processing failed:", err.message);
         }
       })()
     );

@@ -352,6 +352,9 @@ class Settings:
             "youtube": self.youtube,
         }
         
+        # Scheduling
+        self.post_interval_hours: float = 5.0  # default; overridden by KV config
+        
         # Merge in credentials from Cloudflare KV (env vars take precedence)
         self._merge_kv_credentials()
         
@@ -363,6 +366,14 @@ class Settings:
         kv_creds = _fetch_kv_credentials()
         if not kv_creds:
             return
+        
+        # Extract config section (added by CF Worker alongside credentials)
+        config = kv_creds.pop("_config", {})
+        if config:
+            interval = config.get("post_interval_hours")
+            if interval is not None:
+                self.post_interval_hours = float(interval)
+                logger.info(f"Post interval from KV: {self.post_interval_hours} hours")
         
         logger.info(f"Merging KV credentials for platforms: {', '.join(kv_creds.keys())}")
         

@@ -9,8 +9,10 @@ The server is designed for Render's free tier spin-up/spin-down lifecycle:
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import Dict, Optional
+from datetime import datetime
+from typing import Dict, List, Optional
 
+import httpx
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 
 from app.config import settings
@@ -51,6 +53,35 @@ def _validate_config() -> None:
 		logger.warning("No platforms enabled. Check platform credentials.")
 
 
+async def _send_telegram_msg(bot_token: str, chat_id: str, text: str) -> None:
+	"""Send a notification message back to the user via Telegram."""
+	if not bot_token or not chat_id:
+		return
+	try:
+		url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+		async with httpx.AsyncClient() as client:
+			await client.post(url, json={
+				"chat_id": chat_id,
+				"text": text,
+				"parse_mode": "HTML",
+			}, timeout=10)
+	except Exception as e:
+		logger.warning(f"Telegram notification failed: {e}")
+
+
+def _format_results(results: List[Dict], header: str = "\U0001f4ca <b>Results:</b>") -> str:
+	"""Format a list of job results into a single Telegram message."""
+	lines = [header]
+	for r in results:
+		platform = r.get("platform", "unknown")
+		if r.get("success"):
+			url_text = f"\n   {r['post_url']}" if r.get("post_url") else ""
+			lines.append(f"\u2705 <b>{platform}</b>{url_text}")
+		else:
+			lines.append(f"\u274c <b>{platform}</b> \u2014 failed (will retry)")
+	return "\n".join(lines)
+
+
 async def _process_webhook(update: Dict) -> None:
 	try:
 		# Refresh credentials from KV so newly-added platforms are picked up
@@ -70,6 +101,9 @@ async def _process_webhook(update: Dict) -> None:
 		if not message:
 			logger.error("Webhook payload missing Telegram message")
 			return
+
+		# Extract chat_id for sending notifications back
+		chat_id = str(message.get("chat", {}).get("id", ""))
 
 		# Owner-only check (defence-in-depth — CF Worker already filters)
 		owner_id = settings.telegram.owner_id or os.getenv("TELEGRAM_OWNER_ID", "")
@@ -94,25 +128,52 @@ async def _process_webhook(update: Dict) -> None:
 		platforms = determine_platforms(media_info.to_dict())
 		if not platforms:
 			logger.warning("No available platforms for this media type")
+			await _send_telegram_msg(bot_token, chat_id,
+				"\u26a0\ufe0f No platforms configured for this media type.\n"
+				"Use /getcreds to check your setup.")
 			return
 
 		qm = _get_qm()
-		# Queue with no delay — the cron will process them one at a time
-		qm.queue_posts(
-			media_info, 
+		interval_hours = settings.post_interval_hours
+
+		job_ids, scheduled_time = qm.queue_posts(
+			media_info,
 			platforms,
-			start_delay_minutes=0,
-			interval_minutes=0
+			interval_hours=interval_hours,
+			chat_id=chat_id,
 		)
 
-		# Process all queued jobs immediately instead of waiting for cron
-		for _ in range(len(platforms)):
-			try:
-				result = qm.process_next_job()
-				logger.info(f"Immediate queue processing: {result}")
-			except Exception as proc_exc:
-				logger.error(f"Immediate queue processing error: {proc_exc}")
-				break
+		now = datetime.utcnow()
+		is_immediate = (scheduled_time - now).total_seconds() < 60
+
+		if is_immediate:
+			platform_list = ", ".join(platforms)
+			await _send_telegram_msg(bot_token, chat_id,
+				f"\U0001f4e4 <b>Posting now</b> to {platform_list}...")
+
+			# Process all due jobs (the just-queued ones + any previously scheduled)
+			results = qm.process_all_due_jobs()
+
+			if results:
+				summary = _format_results(results)
+				await _send_telegram_msg(bot_token, chat_id, summary)
+		else:
+			# Scheduled for later — notify user
+			time_str = scheduled_time.strftime("%b %d, %H:%M UTC")
+			platform_list = ", ".join(platforms)
+			await _send_telegram_msg(bot_token, chat_id,
+				f"\U0001f4cb <b>Queued for posting</b>\n"
+				f"Platforms: {platform_list}\n"
+				f"\u23f0 Scheduled: {time_str}\n\n"
+				f"Use /status to check queue status.")
+
+			# Still process any OTHER jobs that are due from earlier schedules
+			results = qm.process_all_due_jobs()
+			if results:
+				summary = _format_results(results,
+					header="\U0001f4ca <b>Also processed from queue:</b>")
+				await _send_telegram_msg(bot_token, chat_id, summary)
+
 	except Exception as exc:
 		logger.error(f"Webhook processing failed: {exc}", exc_info=True)
 
@@ -149,8 +210,8 @@ async def process_queue(
 	x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
 ):
 	"""
-	Process the oldest pending job in the queue.
-	Called by the Cloudflare Worker cron trigger every 5 hours.
+	Process all pending jobs that are due.
+	Called by the Cloudflare Worker cron trigger.
 	"""
 	_validate_api_key(x_api_key)
 
@@ -158,22 +219,44 @@ async def process_queue(
 	settings.refresh()
 
 	qm = _get_qm()
-	result = qm.process_next_job()
+	results = qm.process_all_due_jobs()
 
-	logger.info(f"process-queue result: {result}")
-	return result
+	# Send Telegram notifications grouped by chat_id
+	bot_token = settings.telegram.bot_token
+	if bot_token and results:
+		by_chat: Dict[str, list] = {}
+		for r in results:
+			cid = r.get("chat_id") or ""
+			by_chat.setdefault(cid, []).append(r)
+
+		for cid, chat_results in by_chat.items():
+			if not cid:
+				continue
+			summary = _format_results(chat_results,
+				header="\U0001f4ca <b>Scheduled posts processed:</b>")
+			await _send_telegram_msg(bot_token, cid, summary)
+
+	next_scheduled = qm.get_next_scheduled_time()
+
+	logger.info(f"process-queue: processed {len(results)} jobs, next_scheduled={next_scheduled}")
+	return {
+		"processed": len(results),
+		"results": results,
+		"next_scheduled": next_scheduled,
+	}
 
 
 @app.get("/health")
 def health() -> Dict:
-	# Refresh so /health and /status show current state
-	settings.refresh()
 	qm = _get_qm()
 	status_counts = qm.get_queue_status()
+	next_scheduled = qm.get_next_scheduled_time()
 	return {
 		"status": "ok",
 		"queue": status_counts,
+		"next_scheduled": next_scheduled,
 		"enabled_platforms": settings.enabled_platforms,
+		"post_interval_hours": settings.post_interval_hours,
 	}
 
 

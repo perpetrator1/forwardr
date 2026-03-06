@@ -10,6 +10,7 @@ id = "b4a7291fde4c41d58991047216d7affe"
 binding = "CREDENTIALS"
 id = "f490887adf624e629612fdeddf76212a"
 
-# Cron trigger: process the queue every 5 hours
+# Cron trigger: check for due posts every hour
+# The actual post spacing is controlled by /setinterval (default: 5 hours)
 [triggers]
-crons = ["0 */5 * * *"]
+crons = ["0 * * * *"]

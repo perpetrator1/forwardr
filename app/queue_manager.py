@@ -86,6 +86,13 @@ class QueueManager:
                 CREATE INDEX IF NOT EXISTS idx_created_at 
                 ON jobs(created_at)
             """)
+
+            # Migration: add chat_id column for Telegram notifications
+            try:
+                conn.execute("ALTER TABLE jobs ADD COLUMN chat_id TEXT")
+                logger.info("Added chat_id column to jobs table")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
             
             logger.info("Database initialized")
     
@@ -93,36 +100,54 @@ class QueueManager:
         self, 
         media_info: MediaInfo, 
         platforms: List[str],
-        start_delay_minutes: int = 0,
-        interval_minutes: int = 60
-    ) -> List[int]:
+        interval_hours: float = 5.0,
+        chat_id: Optional[str] = None,
+    ) -> Tuple[List[int], datetime]:
         """
-        Queue posts for multiple platforms
+        Queue posts for multiple platforms with interval-based scheduling.
+        
+        Scheduling logic:
+        - If no recent posts exist: schedule for now (immediate)
+        - Otherwise: schedule for (latest_scheduled_time + interval_hours)
+        - All platforms for the same submission share one scheduled time
         
         Args:
             media_info: MediaInfo object with content to post
             platforms: List of platform names
-            start_delay_minutes: Minutes to wait before first post
-            interval_minutes: Minutes between each platform post
+            interval_hours: Hours between each submission (0 = always immediate)
+            chat_id: Telegram chat ID for sending notifications
             
         Returns:
-            List of job IDs created
+            Tuple of (list of job IDs, scheduled datetime)
         """
         job_ids = []
         now = datetime.utcnow()
         
         with self._get_connection() as conn:
-            for i, platform in enumerate(platforms):
-                # Calculate scheduled time
-                delay = start_delay_minutes + (i * interval_minutes)
-                scheduled_time = now + timedelta(minutes=delay)
-                
-                # Insert job
+            # Find the latest scheduled_time across pending/completed jobs
+            cursor = conn.execute("""
+                SELECT MAX(scheduled_time) as latest
+                FROM jobs 
+                WHERE status IN ('pending', 'completed')
+            """)
+            row = cursor.fetchone()
+            latest = row['latest'] if row and row['latest'] else None
+            
+            if latest and interval_hours > 0:
+                latest_dt = datetime.fromisoformat(latest)
+                next_slot = latest_dt + timedelta(hours=interval_hours)
+                # Only schedule in the future; if enough time has passed, go now
+                scheduled_time = max(now, next_slot)
+            else:
+                # No previous jobs or interval is 0 — post immediately
+                scheduled_time = now
+            
+            for platform in platforms:
                 cursor = conn.execute("""
                     INSERT INTO jobs (
                         platform, media_info, scheduled_time, 
-                        status, attempts, created_at, file_id
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        status, attempts, created_at, file_id, chat_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     platform,
                     json.dumps(media_info.to_dict()),
@@ -130,7 +155,8 @@ class QueueManager:
                     'pending',
                     0,
                     now.isoformat(),
-                    media_info.file_id
+                    media_info.file_id,
+                    chat_id,
                 ))
                 
                 job_id = cursor.lastrowid
@@ -141,7 +167,7 @@ class QueueManager:
                     f"at {scheduled_time.isoformat()}"
                 )
         
-        return job_ids
+        return job_ids, scheduled_time
     
     def get_pending_jobs(self) -> List[Dict]:
         """
@@ -203,12 +229,59 @@ class QueueManager:
         success = self.process_job(job)
         self._cleanup_completed_media()
         
+        updated = self.get_job(job["id"])
         return {
             "status": "completed" if success else "failed",
             "job_id": job["id"],
             "platform": job["platform"],
+            "chat_id": job.get("chat_id"),
+            "post_url": updated.get("post_url", "") if updated else "",
             "message": f"Job #{job['id']} for {job['platform']} {'completed' if success else 'failed'}",
         }
+
+    def process_all_due_jobs(self) -> List[Dict]:
+        """
+        Process ALL pending jobs that are due right now.
+        
+        Returns:
+            List of result dicts: [{job_id, platform, chat_id, success, post_url}]
+        """
+        results = []
+        
+        while True:
+            job = self.get_oldest_pending_job()
+            if not job:
+                break
+            
+            success = self.process_job(job)
+            updated = self.get_job(job["id"])
+            
+            results.append({
+                "job_id": job["id"],
+                "platform": job["platform"],
+                "chat_id": job.get("chat_id"),
+                "success": success,
+                "post_url": updated.get("post_url", "") if updated else "",
+            })
+        
+        self._cleanup_completed_media()
+        return results
+
+    def get_next_scheduled_time(self) -> Optional[str]:
+        """
+        Get the earliest scheduled time among pending jobs.
+        
+        Returns:
+            ISO timestamp string, or None if no pending jobs.
+        """
+        with self._get_connection() as conn:
+            cursor = conn.execute("""
+                SELECT MIN(scheduled_time) as next_time
+                FROM jobs 
+                WHERE status = 'pending'
+            """)
+            row = cursor.fetchone()
+            return row['next_time'] if row and row['next_time'] else None
     
     def update_job_status(
         self, 
