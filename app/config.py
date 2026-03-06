@@ -361,6 +361,35 @@ async def _fetch_kv_credentials_async() -> Dict[str, Dict[str, str]]:
     return {}
 
 
+# Maps KV cloudinary keys → environment variable names
+_CLOUDINARY_ENV_MAP = {
+    "cloud_name": "CLOUDINARY_CLOUD_NAME",
+    "api_key": "CLOUDINARY_API_KEY",
+    "api_secret": "CLOUDINARY_API_SECRET",
+}
+
+
+def _inject_cloudinary_from_kv(kv_creds: Dict) -> None:
+    """Set Cloudinary env vars from KV so cloudinary_config.py can read them."""
+    cloud_kv = kv_creds.get("cloudinary", {})
+    if not cloud_kv:
+        return
+    injected = []
+    for kv_key, env_var in _CLOUDINARY_ENV_MAP.items():
+        value = cloud_kv.get(kv_key)
+        if value and not os.getenv(env_var):
+            os.environ[env_var] = value
+            injected.append(env_var)
+    if injected:
+        logger.info(f"Injected Cloudinary env vars from KV: {', '.join(injected)}")
+        # Re-configure Cloudinary so it picks up the new env vars
+        try:
+            from app.utils.cloudinary_config import configure_cloudinary
+            configure_cloudinary()
+        except Exception as e:
+            logger.warning(f"Cloudinary re-configuration failed: {e}")
+
+
 def _merge_kv_into_settings(platform_obj: Any, kv_creds: Dict[str, str], field_map: Dict[str, str]) -> None:
     """
     For each key in kv_creds, if the corresponding Pydantic field is
@@ -439,6 +468,9 @@ class Settings:
             field_map = _KV_FIELD_MAP.get(platform_name, {})
             if platform_kv and field_map:
                 _merge_kv_into_settings(platform_obj, platform_kv, field_map)
+        
+        # Cloudinary has no Pydantic model — inject into os.environ
+        _inject_cloudinary_from_kv(kv_creds)
     
     def _validate_platforms(self) -> List[str]:
         """
@@ -510,6 +542,10 @@ class Settings:
                 field_map = _KV_FIELD_MAP.get(platform_name, {})
                 if platform_kv and field_map:
                     _merge_kv_into_settings(platform_obj, platform_kv, field_map)
+
+            # Cloudinary has no Pydantic model — inject into os.environ so
+            # cloudinary_config.configure_cloudinary() can pick them up.
+            _inject_cloudinary_from_kv(kv_creds)
 
         self.enabled_platforms = self._validate_platforms()
         global ENABLED_PLATFORMS

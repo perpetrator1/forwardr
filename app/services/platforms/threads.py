@@ -282,11 +282,17 @@ def post(media_info: Dict) -> Optional[str]:
         if media_type == 'photo' and local_path:
             image_url = _upload_media_to_public_url(local_path)
             if not image_url:
-                logger.warning("Threads: Falling back to text-only post")
+                logger.warning("Threads: Media upload failed, falling back to text-only post")
+                if not text:
+                    logger.error("Threads: Cannot fall back to text-only — caption is empty")
+                    return None
         elif media_type == 'video' and local_path:
             video_url = _upload_media_to_public_url(local_path)
             if not video_url:
-                logger.warning("Threads: Falling back to text-only post")
+                logger.warning("Threads: Media upload failed, falling back to text-only post")
+                if not text:
+                    logger.error("Threads: Cannot fall back to text-only — caption is empty")
+                    return None
 
         # --- Create → (wait) → Publish ------------------------------------------
         container_id = _create_media_container(
