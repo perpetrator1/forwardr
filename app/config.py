@@ -405,6 +405,19 @@ class Settings:
         """Get configuration for a specific platform"""
         return self._platforms.get(platform.lower())
 
+    def refresh(self) -> None:
+        """Re-fetch KV credentials and recalculate enabled platforms.
+        
+        Call this before operations that need the latest credentials,
+        since users may add credentials via /setcred at any time.
+        """
+        self._merge_kv_credentials()
+        self.enabled_platforms = self._validate_platforms()
+        # Update the module-level reference too
+        global ENABLED_PLATFORMS
+        ENABLED_PLATFORMS = self.enabled_platforms
+        logger.info(f"Config refreshed. Enabled platforms: {', '.join(self.enabled_platforms) or 'none'}")
+
 
 # Create singleton settings instance
 settings = Settings()

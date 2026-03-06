@@ -163,7 +163,9 @@ async function listConfiguredPlatforms(kvNamespace) {
 // ---------------------------------------------------------------------------
 
 async function handleCommand(env, chatId, text) {
-  const parts = text.trim().split(/\s+/);
+  // Only use the first line — ignore any additional lines in the message
+  const firstLine = text.trim().split("\n")[0].trim();
+  const parts = firstLine.split(/\s+/);
   const command = parts[0].toLowerCase().replace(/@\w+$/, ""); // strip @botname
 
   switch (command) {
@@ -187,6 +189,14 @@ async function handleCommand(env, chatId, text) {
           `❌ Unknown platform: \`${platform}\`\n\n` +
           "*Valid platforms:* " +
           Object.keys(PLATFORM_KEYS).join(", ")
+        );
+      }
+
+      if (!PLATFORM_KEYS[platform].includes(key)) {
+        return (
+          `❌ Unknown key: \`${key}\` for platform \`${platform}\`\n\n` +
+          "*Valid keys:* " +
+          PLATFORM_KEYS[platform].map((k) => `\`${k}\``).join(", ")
         );
       }
 
@@ -235,10 +245,12 @@ async function handleCommand(env, chatId, text) {
         const missing = required.filter((k) => !keys.includes(k));
 
         const statusIcon = missing.length === 0 ? "✅" : "⚠️";
-        msg += `${statusIcon} *${platform}*: ${keys.join(", ")}`;
+        const formattedKeys = keys.map((k) => `\`${k}\``).join(", ");
+        msg += `${statusIcon} *${platform}*: ${formattedKeys}`;
 
         if (missing.length > 0) {
-          msg += `\n   _Missing:_ ${missing.join(", ")}`;
+          const formattedMissing = missing.map((k) => `\`${k}\``).join(", ");
+          msg += `\n   _Missing:_ ${formattedMissing}`;
         }
         msg += "\n";
       }
@@ -504,6 +516,13 @@ export default {
       (async () => {
         try {
           await forwardToRender(env, payload);
+          // Also trigger immediate queue processing so posts go out now
+          // instead of waiting for the next cron cycle
+          try {
+            await triggerQueueProcessing(env);
+          } catch (qErr) {
+            console.error("Immediate queue processing failed (will retry on cron):", qErr.message);
+          }
         } catch (err) {
           await storeFailed(env, updateId, payload);
         }

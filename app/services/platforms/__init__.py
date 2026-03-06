@@ -3,7 +3,7 @@ Platform integration services - Central router for posting to social media platf
 """
 import logging
 from typing import Dict, List, Optional, Callable
-from app.config import settings, ENABLED_PLATFORMS
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +80,7 @@ def get_available_platforms() -> List[str]:
     """
     available = []
     
-    for platform in ENABLED_PLATFORMS:
+    for platform in settings.enabled_platforms:
         # Check if platform handler was imported successfully
         if platform in _platform_handlers:
             available.append(platform)
@@ -167,7 +167,7 @@ def post_to_platform(platform: str, media_info: Dict) -> str:
         return ""
     
     # Check if platform is configured
-    if platform not in ENABLED_PLATFORMS:
+    if platform not in settings.enabled_platforms:
         logger.error(
             f"Platform '{platform}' not configured (missing credentials)"
         )

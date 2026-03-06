@@ -13,7 +13,7 @@ from typing import Dict, Optional
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 
-from app.config import settings, ENABLED_PLATFORMS
+from app.config import settings
 from app.media_handler import MediaHandler
 from app.queue_manager import get_queue_manager
 from app.services.platforms import determine_platforms, get_loaded_handlers
@@ -47,12 +47,15 @@ def _validate_config() -> None:
 		logger.warning("API key is not configured. Set API_SECRET_KEY or api_key.")
 	if not settings.telegram.bot_token:
 		logger.warning("Telegram bot token is missing. Webhook processing will fail.")
-	if not ENABLED_PLATFORMS:
+	if not settings.enabled_platforms:
 		logger.warning("No platforms enabled. Check platform credentials.")
 
 
 async def _process_webhook(update: Dict) -> None:
 	try:
+		# Refresh credentials from KV so newly-added platforms are picked up
+		settings.refresh()
+
 		bot_token = settings.telegram.bot_token
 		if not bot_token:
 			logger.error("Cannot process webhook without Telegram bot token")
@@ -101,6 +104,15 @@ async def _process_webhook(update: Dict) -> None:
 			start_delay_minutes=0,
 			interval_minutes=0
 		)
+
+		# Process all queued jobs immediately instead of waiting for cron
+		for _ in range(len(platforms)):
+			try:
+				result = qm.process_next_job()
+				logger.info(f"Immediate queue processing: {result}")
+			except Exception as proc_exc:
+				logger.error(f"Immediate queue processing error: {proc_exc}")
+				break
 	except Exception as exc:
 		logger.error(f"Webhook processing failed: {exc}", exc_info=True)
 
@@ -109,7 +121,7 @@ async def _process_webhook(update: Dict) -> None:
 async def _lifespan(application: FastAPI):
 	"""Startup / shutdown lifecycle."""
 	_validate_config()
-	logger.info(f"Enabled platforms: {', '.join(ENABLED_PLATFORMS) if ENABLED_PLATFORMS else 'none'}")
+	logger.info(f"Enabled platforms: {', '.join(settings.enabled_platforms) if settings.enabled_platforms else 'none'}")
 	logger.info(f"Loaded handlers: {', '.join(get_loaded_handlers())}")
 	yield
 
@@ -142,6 +154,9 @@ async def process_queue(
 	"""
 	_validate_api_key(x_api_key)
 
+	# Refresh credentials so newly-configured platforms are recognised
+	settings.refresh()
+
 	qm = _get_qm()
 	result = qm.process_next_job()
 
@@ -151,12 +166,14 @@ async def process_queue(
 
 @app.get("/health")
 def health() -> Dict:
+	# Refresh so /health and /status show current state
+	settings.refresh()
 	qm = _get_qm()
 	status_counts = qm.get_queue_status()
 	return {
 		"status": "ok",
 		"queue": status_counts,
-		"enabled_platforms": ENABLED_PLATFORMS,
+		"enabled_platforms": settings.enabled_platforms,
 	}
 
 
