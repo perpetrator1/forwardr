@@ -420,10 +420,42 @@ class Settings:
         """Re-fetch KV credentials and recalculate enabled platforms.
         
         Call this before operations that need the latest credentials,
-        since users may add credentials via /setcred at any time.
+        since users may add/delete credentials via /setcred or /delcred at any time.
+        
+        This completely reinitializes platform settings from env vars, then
+        overlays KV credentials — ensuring deleted KV creds actually disappear.
         """
+        # Re-initialize all platform settings from env vars (clears old KV values)
+        self.telegram = TelegramSettings()
+        self.bluesky = BlueskySettings()
+        self.mastodon = MastodonSettings()
+        self.instagram = InstagramSettings()
+        self.threads = ThreadsSettings()
+        self.twitter = TwitterSettings()
+        self.reddit = RedditSettings()
+        self.youtube = YouTubeSettings()
+        
+        # Update the registry
+        self._platforms = {
+            "telegram": self.telegram,
+            "bluesky": self.bluesky,
+            "mastodon": self.mastodon,
+            "instagram": self.instagram,
+            "threads": self.threads,
+            "twitter": self.twitter,
+            "reddit": self.reddit,
+            "youtube": self.youtube,
+        }
+        
+        # Reset interval to default before merging KV
+        self.post_interval_hours = 5.0
+        
+        # Merge KV credentials on top of env vars
         self._merge_kv_credentials()
+        
+        # Recalculate enabled platforms
         self.enabled_platforms = self._validate_platforms()
+        
         # Update the module-level reference too
         global ENABLED_PLATFORMS
         ENABLED_PLATFORMS = self.enabled_platforms
