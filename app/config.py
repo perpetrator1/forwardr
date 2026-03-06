@@ -271,37 +271,94 @@ _KV_FIELD_MAP: Dict[str, Dict[str, str]] = {
 }
 
 
+def _kv_fetch_params():
+    """Return (url, headers) for the KV credentials endpoint, or (None, None) if not configured."""
+    if os.getenv("FORWARDR_SKIP_KV_FETCH", ""):
+        return None, None
+    worker_url = os.getenv("CLOUDFLARE_WORKER_URL", "").rstrip("/")
+    api_key = os.getenv("API_SECRET_KEY", "")
+    if not worker_url or not api_key:
+        logger.debug("No CLOUDFLARE_WORKER_URL or API_SECRET_KEY — skipping KV fetch")
+        return None, None
+    return f"{worker_url}/credentials", {"X-API-Key": api_key}
+
+
+_KV_TIMEOUT = 15          # seconds — Render free-tier outbound can be slow
+_KV_RETRIES = 2           # total attempts
+_KV_RETRY_DELAY = 2       # seconds between retries
+
+
 def _fetch_kv_credentials() -> Dict[str, Dict[str, str]]:
     """
     Fetch credentials from the Cloudflare Worker /credentials endpoint.
     Returns {platform: {key: value}} or empty dict on failure.
-    
+
     Set FORWARDR_SKIP_KV_FETCH=1 in tests to skip the network call.
     """
-    if os.getenv("FORWARDR_SKIP_KV_FETCH", ""):
-        return {}
-
-    worker_url = os.getenv("CLOUDFLARE_WORKER_URL", "").rstrip("/")
-    api_key = os.getenv("API_SECRET_KEY", "")
-
-    if not worker_url or not api_key:
-        logger.debug("No CLOUDFLARE_WORKER_URL or API_SECRET_KEY — skipping KV fetch")
+    url, headers = _kv_fetch_params()
+    if not url:
         return {}
 
     if httpx is None:
         logger.debug("httpx not installed — skipping KV credential fetch")
         return {}
 
-    url = f"{worker_url}/credentials"
-    try:
-        resp = httpx.get(url, headers={"X-API-Key": api_key}, timeout=3)
-        if resp.status_code != 200:
-            logger.warning(f"KV credential fetch returned {resp.status_code}")
-            return {}
-        return resp.json()
-    except Exception as e:
-        logger.warning(f"Failed to fetch KV credentials: {e}")
+    import time as _time
+    last_err = None
+    for attempt in range(1, _KV_RETRIES + 1):
+        try:
+            logger.info(f"KV fetch attempt {attempt}/{_KV_RETRIES} → {url}")
+            resp = httpx.get(url, headers=headers, timeout=_KV_TIMEOUT)
+            if resp.status_code != 200:
+                logger.warning(f"KV credential fetch returned {resp.status_code}")
+                last_err = f"HTTP {resp.status_code}"
+            else:
+                logger.info("KV credentials fetched successfully")
+                return resp.json()
+        except Exception as e:
+            last_err = e
+            logger.warning(f"KV fetch attempt {attempt} failed: {e}")
+        if attempt < _KV_RETRIES:
+            _time.sleep(_KV_RETRY_DELAY)
+
+    logger.warning(f"All KV fetch attempts failed. Last error: {last_err}")
+    return {}
+
+
+async def _fetch_kv_credentials_async() -> Dict[str, Dict[str, str]]:
+    """
+    Async variant of _fetch_kv_credentials — used inside async webhook processing
+    so it doesn't block the event loop.
+    """
+    url, headers = _kv_fetch_params()
+    if not url:
         return {}
+
+    if httpx is None:
+        logger.debug("httpx not installed — skipping async KV credential fetch")
+        return {}
+
+    import asyncio
+    last_err = None
+    for attempt in range(1, _KV_RETRIES + 1):
+        try:
+            logger.info(f"Async KV fetch attempt {attempt}/{_KV_RETRIES} → {url}")
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(url, headers=headers, timeout=_KV_TIMEOUT)
+            if resp.status_code != 200:
+                logger.warning(f"KV credential fetch returned {resp.status_code}")
+                last_err = f"HTTP {resp.status_code}"
+            else:
+                logger.info("KV credentials fetched successfully (async)")
+                return resp.json()
+        except Exception as e:
+            last_err = e
+            logger.warning(f"Async KV fetch attempt {attempt} failed: {e}")
+        if attempt < _KV_RETRIES:
+            await asyncio.sleep(_KV_RETRY_DELAY)
+
+    logger.warning(f"All async KV fetch attempts failed. Last error: {last_err}")
+    return {}
 
 
 def _merge_kv_into_settings(platform_obj: Any, kv_creds: Dict[str, str], field_map: Dict[str, str]) -> None:
@@ -416,16 +473,8 @@ class Settings:
         """Get configuration for a specific platform"""
         return self._platforms.get(platform.lower())
 
-    def refresh(self) -> None:
-        """Re-fetch KV credentials and recalculate enabled platforms.
-        
-        Call this before operations that need the latest credentials,
-        since users may add/delete credentials via /setcred or /delcred at any time.
-        
-        This completely reinitializes platform settings from env vars, then
-        overlays KV credentials — ensuring deleted KV creds actually disappear.
-        """
-        # Re-initialize all platform settings from env vars (clears old KV values)
+    def _reinit_platforms(self) -> None:
+        """Re-create all platform settings from env vars and update the registry."""
         self.telegram = TelegramSettings()
         self.bluesky = BlueskySettings()
         self.mastodon = MastodonSettings()
@@ -434,8 +483,6 @@ class Settings:
         self.twitter = TwitterSettings()
         self.reddit = RedditSettings()
         self.youtube = YouTubeSettings()
-        
-        # Update the registry
         self._platforms = {
             "telegram": self.telegram,
             "bluesky": self.bluesky,
@@ -446,20 +493,48 @@ class Settings:
             "reddit": self.reddit,
             "youtube": self.youtube,
         }
-        
-        # Reset interval to default before merging KV
         self.post_interval_hours = 5.0
-        
-        # Merge KV credentials on top of env vars
-        self._merge_kv_credentials()
-        
-        # Recalculate enabled platforms
+
+    def _apply_kv_and_validate(self, kv_creds: Dict) -> None:
+        """Merge a pre-fetched KV dict into settings and recalculate enabled platforms."""
+        if kv_creds:
+            config = kv_creds.pop("_config", {})
+            if config:
+                interval = config.get("post_interval_hours")
+                if interval is not None:
+                    self.post_interval_hours = float(interval)
+                    logger.info(f"Post interval from KV: {self.post_interval_hours} hours")
+            logger.info(f"Merging KV credentials for platforms: {', '.join(kv_creds.keys())}")
+            for platform_name, platform_obj in self._platforms.items():
+                platform_kv = kv_creds.get(platform_name, {})
+                field_map = _KV_FIELD_MAP.get(platform_name, {})
+                if platform_kv and field_map:
+                    _merge_kv_into_settings(platform_obj, platform_kv, field_map)
+
         self.enabled_platforms = self._validate_platforms()
-        
-        # Update the module-level reference too
         global ENABLED_PLATFORMS
         ENABLED_PLATFORMS = self.enabled_platforms
-        logger.info(f"Config refreshed. Enabled platforms: {', '.join(self.enabled_platforms) or 'none'}")
+
+    def refresh(self) -> None:
+        """Re-fetch KV credentials and recalculate enabled platforms (sync).
+        
+        Call this before operations that need the latest credentials,
+        since users may add/delete credentials via /setcred or /delcred at any time.
+        
+        This completely reinitializes platform settings from env vars, then
+        overlays KV credentials — ensuring deleted KV creds actually disappear.
+        """
+        self._reinit_platforms()
+        kv_creds = _fetch_kv_credentials()
+        self._apply_kv_and_validate(kv_creds)
+        logger.info(f"Config refreshed (sync). Enabled platforms: {', '.join(self.enabled_platforms) or 'none'}")
+
+    async def refresh_async(self) -> None:
+        """Async version of refresh() — avoids blocking the event loop."""
+        self._reinit_platforms()
+        kv_creds = await _fetch_kv_credentials_async()
+        self._apply_kv_and_validate(kv_creds)
+        logger.info(f"Config refreshed (async). Enabled platforms: {', '.join(self.enabled_platforms) or 'none'}")
 
 
 # Create singleton settings instance

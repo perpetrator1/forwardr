@@ -85,7 +85,7 @@ def _format_results(results: List[Dict], header: str = "\U0001f4ca <b>Results:</
 async def _process_webhook(update: Dict) -> None:
 	try:
 		# Refresh credentials from KV so newly-added platforms are picked up
-		settings.refresh()
+		await settings.refresh_async()
 
 		bot_token = settings.telegram.bot_token
 		if not bot_token:
@@ -216,7 +216,7 @@ async def process_queue(
 	_validate_api_key(x_api_key)
 
 	# Refresh credentials so newly-configured platforms are recognised
-	settings.refresh()
+	await settings.refresh_async()
 
 	qm = _get_qm()
 	results = qm.process_all_due_jobs()
