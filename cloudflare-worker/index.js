@@ -343,6 +343,107 @@ async function handleCommand(env, chatId, text) {
       return `✅ Post interval set to *${display}*.`;
     }
 
+    case "/cancel": {
+      // /cancel <job_id> or /cancel all
+      if (parts.length < 2) {
+        return (
+          "❌ *Usage:*\n" +
+          "`/cancel <job_id>` — Cancel a specific queued post\n" +
+          "`/cancel all` — Cancel all pending posts\n\n" +
+          "Use `/queue` to see pending jobs and their IDs."
+        );
+      }
+
+      const target = parts[1].toLowerCase();
+
+      try {
+        const baseUrl = env.RENDER_URL.replace(/\/$/, "");
+
+        if (target === "all") {
+          // Fetch queue, cancel every pending job
+          const qResp = await fetch(`${baseUrl}/queue`, {
+            signal: AbortSignal.timeout(15000),
+          });
+          if (!qResp.ok) {
+            return "⚠️ Could not reach the server. It may be spinning up — try again in a minute.";
+          }
+          const qData = await qResp.json();
+          const pending = (qData.jobs || []).filter((j) => j.status === "pending");
+
+          if (pending.length === 0) {
+            return "📋 No pending jobs to cancel.";
+          }
+
+          let cancelled = 0;
+          for (const job of pending) {
+            const resp = await fetch(`${baseUrl}/queue/${job.id}`, {
+              method: "DELETE",
+              headers: { "X-API-Key": env.API_KEY },
+            });
+            if (resp.ok) cancelled++;
+          }
+
+          return `🗑️ Cancelled ${cancelled}/${pending.length} pending jobs.`;
+        }
+
+        // Single job cancel
+        const jobId = parseInt(target, 10);
+        if (isNaN(jobId)) {
+          return "❌ Please provide a valid job ID or `all`.";
+        }
+
+        const resp = await fetch(`${baseUrl}/queue/${jobId}`, {
+          method: "DELETE",
+          headers: { "X-API-Key": env.API_KEY },
+        });
+
+        if (resp.ok) {
+          return `🗑️ Job #${jobId} cancelled.`;
+        }
+
+        const errData = await resp.json().catch(() => ({}));
+        return `❌ Could not cancel job #${jobId}: ${errData.detail || resp.status}`;
+      } catch (e) {
+        return "⚠️ Could not reach the server. It may be spinning up — try again in a minute.";
+      }
+    }
+
+    case "/queue": {
+      // Show pending queue items
+      try {
+        const baseUrl = env.RENDER_URL.replace(/\/$/, "");
+        const resp = await fetch(`${baseUrl}/queue`, {
+          signal: AbortSignal.timeout(15000),
+        });
+
+        if (!resp.ok) {
+          return "⚠️ Could not reach the server. It may be spinning up — try again in a minute.";
+        }
+
+        const data = await resp.json();
+        const pending = (data.jobs || []).filter((j) => j.status === "pending");
+
+        if (pending.length === 0) {
+          return "📋 No pending jobs in the queue.";
+        }
+
+        let msg = `📋 *Pending Jobs (${pending.length}):*\n\n`;
+        for (const job of pending.slice(0, 15)) {
+          const sched = job.scheduled_time ? job.scheduled_time.replace("T", " ").slice(0, 16) : "?";
+          msg += `• #${job.id} — *${job.platform}* — ${sched} UTC\n`;
+        }
+
+        if (pending.length > 15) {
+          msg += `\n_...and ${pending.length - 15} more_`;
+        }
+
+        msg += "\n\nUse `/cancel <id>` or `/cancel all` to remove jobs.";
+        return msg;
+      } catch (e) {
+        return "⚠️ Could not reach the server. It may be spinning up — try again in a minute.";
+      }
+    }
+
     case "/help": {
       return (
         "🤖 *Forwardr Bot Commands*\n\n" +
@@ -352,7 +453,9 @@ async function handleCommand(env, chatId, text) {
         "`/delcred <platform> <key>` — Delete a credential\n" +
         "`/getcreds` — List configured platforms\n\n" +
         "⏰ *Scheduling:*\n" +
-        "`/setinterval <hours>` — Set hours between posts (default: 5)\n\n" +
+        "`/setinterval <hours>` — Set hours between posts (default: 5)\n" +
+        "`/queue` — View pending posts\n" +
+        "`/cancel <id>` or `/cancel all` — Cancel queued posts\n\n" +
         "📊 *Status:*\n" +
         "`/status` — Show queue & server status\n" +
         "`/help` — Show this help message\n\n" +
