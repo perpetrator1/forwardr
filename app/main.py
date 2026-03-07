@@ -82,6 +82,32 @@ async def _send_telegram_msg(bot_token: str, chat_id: str, text: str) -> None:
 		logger.warning(f"Telegram notification failed: {e}")
 
 
+async def _push_next_scheduled() -> None:
+	"""Push the current next_scheduled time to the CF Worker KV.
+
+	The CF Worker cron reads this value to decide whether to wake Render.
+	By pushing after every queue mutation we keep it accurate without
+	polling or timing hacks.
+	"""
+	cf_url = os.getenv("CLOUDFLARE_WORKER_URL", "").rstrip("/")
+	api_key = _get_expected_api_key()
+	if not cf_url or not api_key:
+		return
+	try:
+		qm = _get_qm()
+		next_scheduled = qm.get_next_scheduled_time()
+		async with httpx.AsyncClient() as client:
+			await client.post(
+				f"{cf_url}/update-schedule",
+				json={"next_scheduled": next_scheduled},
+				headers={"X-API-Key": api_key},
+				timeout=10,
+			)
+		logger.debug(f"Pushed next_scheduled={next_scheduled} to CF Worker KV")
+	except Exception as e:
+		logger.warning(f"Failed to push next_scheduled to CF Worker: {e}")
+
+
 def _format_results(results: List[Dict], header: str = "\U0001f4ca <b>Results:</b>") -> str:
 	"""Format a list of job results into a single Telegram message."""
 	lines = [header]
@@ -193,6 +219,9 @@ async def _process_webhook(update: Dict) -> None:
 			if results:
 				summary = _format_results(results)
 				await _send_telegram_msg(bot_token, chat_id, summary)
+
+			# Push updated schedule to CF Worker KV
+			await _push_next_scheduled()
 		else:
 			# Scheduled for later — notify user
 			time_str = scheduled_time.strftime("%b %d, %H:%M IST")
@@ -209,6 +238,9 @@ async def _process_webhook(update: Dict) -> None:
 				summary = _format_results(results,
 					header="\U0001f4ca <b>Also processed from queue:</b>")
 				await _send_telegram_msg(bot_token, chat_id, summary)
+
+			# Push updated schedule to CF Worker KV
+			await _push_next_scheduled()
 
 	except Exception as exc:
 		logger.error(f"Webhook processing failed: {exc}", exc_info=True)
@@ -291,6 +323,9 @@ async def _queue_processing_loop():
 
 			if results:
 				logger.info(f"Background loop processed {len(results)} jobs")
+
+			# Keep CF Worker KV in sync
+			await _push_next_scheduled()
 		except Exception as exc:
 			logger.error(f"Background queue loop error: {exc}", exc_info=True)
 
@@ -377,6 +412,14 @@ async def process_queue(
 	next_scheduled = qm.get_next_scheduled_time()
 
 	logger.info(f"process-queue: processed {len(results)} jobs, next_scheduled={next_scheduled}")
+
+	# Push updated schedule to CF Worker KV (fire-and-forget is fine;
+	# the cron also reads next_scheduled from the response)
+	try:
+		await _push_next_scheduled()
+	except Exception:
+		pass
+
 	return {
 		"processed": len(results),
 		"results": results,
@@ -437,9 +480,10 @@ def queue_list() -> Dict:
 
 
 @app.delete("/queue/{job_id}")
-def queue_cancel(job_id: int) -> Dict:
+async def queue_cancel(job_id: int) -> Dict:
 	qm = _get_qm()
 	success = qm.cancel_job(job_id)
 	if not success:
 		raise HTTPException(status_code=400, detail="Job not pending or not found")
+	await _push_next_scheduled()
 	return {"status": "cancelled", "job_id": job_id}
