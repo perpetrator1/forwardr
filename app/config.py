@@ -285,7 +285,12 @@ def _kv_fetch_params():
 
 _KV_TIMEOUT = 15          # seconds — Render free-tier outbound can be slow
 _KV_RETRIES = 2           # total attempts
-_KV_RETRY_DELAY = 2       # seconds between retries
+_KV_RETRY_DELAY = 3       # seconds between retries
+
+# Simple cooldown to avoid hammering the worker when it keeps failing.
+# After a full failure cycle, suppress retries for this many seconds.
+_KV_COOLDOWN_SECONDS = 120
+_kv_last_failure_time: float = 0.0
 
 
 def _fetch_kv_credentials() -> Dict[str, Dict[str, str]]:
@@ -295,6 +300,7 @@ def _fetch_kv_credentials() -> Dict[str, Dict[str, str]]:
 
     Set FORWARDR_SKIP_KV_FETCH=1 in tests to skip the network call.
     """
+    global _kv_last_failure_time
     url, headers = _kv_fetch_params()
     if not url:
         return {}
@@ -304,16 +310,29 @@ def _fetch_kv_credentials() -> Dict[str, Dict[str, str]]:
         return {}
 
     import time as _time
+
+    # Cooldown: skip if we recently failed to avoid log spam
+    if _kv_last_failure_time and (_time.time() - _kv_last_failure_time) < _KV_COOLDOWN_SECONDS:
+        logger.debug("KV fetch skipped (cooldown active)")
+        return {}
+
     last_err = None
     for attempt in range(1, _KV_RETRIES + 1):
         try:
             logger.info(f"KV fetch attempt {attempt}/{_KV_RETRIES} → {url}")
             resp = httpx.get(url, headers=headers, timeout=_KV_TIMEOUT)
             if resp.status_code != 200:
-                logger.warning(f"KV credential fetch returned {resp.status_code}")
+                # Try to read error detail from the worker response
+                detail = ""
+                try:
+                    detail = f" — {resp.text[:200]}"
+                except Exception:
+                    pass
+                logger.warning(f"KV credential fetch returned {resp.status_code}{detail}")
                 last_err = f"HTTP {resp.status_code}"
             else:
                 logger.info("KV credentials fetched successfully")
+                _kv_last_failure_time = 0.0  # reset cooldown
                 return resp.json()
         except Exception as e:
             last_err = e
@@ -322,6 +341,7 @@ def _fetch_kv_credentials() -> Dict[str, Dict[str, str]]:
             _time.sleep(_KV_RETRY_DELAY)
 
     logger.warning(f"All KV fetch attempts failed. Last error: {last_err}")
+    _kv_last_failure_time = _time.time()  # start cooldown
     return {}
 
 
@@ -330,6 +350,7 @@ async def _fetch_kv_credentials_async() -> Dict[str, Dict[str, str]]:
     Async variant of _fetch_kv_credentials — used inside async webhook processing
     so it doesn't block the event loop.
     """
+    global _kv_last_failure_time
     url, headers = _kv_fetch_params()
     if not url:
         return {}
@@ -339,6 +360,13 @@ async def _fetch_kv_credentials_async() -> Dict[str, Dict[str, str]]:
         return {}
 
     import asyncio
+    import time as _time
+
+    # Cooldown: skip if we recently failed to avoid log spam
+    if _kv_last_failure_time and (_time.time() - _kv_last_failure_time) < _KV_COOLDOWN_SECONDS:
+        logger.debug("KV fetch skipped (cooldown active)")
+        return {}
+
     last_err = None
     for attempt in range(1, _KV_RETRIES + 1):
         try:
@@ -346,10 +374,16 @@ async def _fetch_kv_credentials_async() -> Dict[str, Dict[str, str]]:
             async with httpx.AsyncClient() as client:
                 resp = await client.get(url, headers=headers, timeout=_KV_TIMEOUT)
             if resp.status_code != 200:
-                logger.warning(f"KV credential fetch returned {resp.status_code}")
+                detail = ""
+                try:
+                    detail = f" — {resp.text[:200]}"
+                except Exception:
+                    pass
+                logger.warning(f"KV credential fetch returned {resp.status_code}{detail}")
                 last_err = f"HTTP {resp.status_code}"
             else:
                 logger.info("KV credentials fetched successfully (async)")
+                _kv_last_failure_time = 0.0  # reset cooldown
                 return resp.json()
         except Exception as e:
             last_err = e
@@ -358,6 +392,7 @@ async def _fetch_kv_credentials_async() -> Dict[str, Dict[str, str]]:
             await asyncio.sleep(_KV_RETRY_DELAY)
 
     logger.warning(f"All async KV fetch attempts failed. Last error: {last_err}")
+    _kv_last_failure_time = _time.time()  # start cooldown
     return {}
 
 
