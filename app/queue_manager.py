@@ -510,9 +510,11 @@ class QueueManager:
             return {"status": "idle", "message": "No pending jobs"}
         
         success = self.process_job(job)
+        
+        # Read the updated job BEFORE cleanup deletes it from the DB
+        updated = self.get_job(job["id"])
         self._cleanup_completed_media()
         
-        updated = self.get_job(job["id"])
         return {
             "status": "completed" if success else "failed",
             "job_id": job["id"],
@@ -921,14 +923,35 @@ class QueueManager:
 
         logger.info(f"Job #{job_id} cancelled")
         self._delete_finished_jobs()
+
+        # Recalculate metadata so a cancelled future-schedule doesn't
+        # block the next submission from going out immediately.
+        with self._get_connection() as conn:
+            cursor = conn.execute("""
+                SELECT MAX(scheduled_time) as latest
+                FROM jobs WHERE status = 'pending'
+            """)
+            row = cursor.fetchone()
+            if row and row['latest']:
+                conn.execute("""
+                    INSERT INTO metadata (key, value) VALUES ('last_scheduled_time', ?)
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """, (row['latest'],))
+            else:
+                conn.execute("DELETE FROM metadata WHERE key = 'last_scheduled_time'")
+
         return True
     
     def purge_old_jobs(self, days: int = 7) -> int:
         """
-        Delete completed jobs older than specified days
+        Delete failed jobs older than specified days.
+        
+        Completed and cancelled jobs are deleted immediately after
+        processing, so this only targets failed jobs that accumulate
+        over time.
         
         Args:
-            days: Number of days to keep completed jobs
+            days: Number of days to keep failed jobs
             
         Returns:
             Number of jobs deleted
@@ -938,14 +961,14 @@ class QueueManager:
         with self._get_connection() as conn:
             cursor = conn.execute("""
                 DELETE FROM jobs
-                WHERE status = 'completed'
-                AND completed_at < ?
+                WHERE status = 'failed'
+                AND updated_at < ?
             """, (cutoff_date.isoformat(),))
             
             deleted_count = cursor.rowcount
         
         if deleted_count > 0:
-            logger.info(f"Purged {deleted_count} old completed jobs")
+            logger.info(f"Purged {deleted_count} old failed jobs")
         
         return deleted_count
     
