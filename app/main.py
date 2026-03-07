@@ -5,7 +5,12 @@ The server is designed for Render's free tier spin-up/spin-down lifecycle:
 - /webhook     receives Telegram updates forwarded by the Cloudflare Worker
 - /process-queue  processes the oldest pending job (called by CF Worker cron)
 - /health, /queue  monitoring endpoints
+
+A lightweight background loop also processes due jobs every 60 seconds so
+scheduled posts are picked up even if the CF Worker cron fails to reach the
+server.
 """
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -178,13 +183,65 @@ async def _process_webhook(update: Dict) -> None:
 		logger.error(f"Webhook processing failed: {exc}", exc_info=True)
 
 
+_QUEUE_POLL_INTERVAL = int(os.getenv("QUEUE_POLL_INTERVAL", "60"))  # seconds
+
+
+async def _queue_processing_loop():
+	"""Periodically process due jobs in the background.
+
+	This ensures scheduled posts are picked up even when the external
+	CF Worker cron trigger is unavailable (e.g. local dev, cold-start
+	races).  The interval is intentionally short (default 60 s) so that
+	posts go out close to their scheduled time.
+	"""
+	while True:
+		await asyncio.sleep(_QUEUE_POLL_INTERVAL)
+		try:
+			await settings.refresh_async()
+			qm = _get_qm()
+			results = qm.process_all_due_jobs()
+
+			# Notify users via Telegram for jobs processed in the background
+			bot_token = settings.telegram.bot_token
+			if bot_token and results:
+				by_chat: Dict[str, list] = {}
+				for r in results:
+					cid = r.get("chat_id") or ""
+					by_chat.setdefault(cid, []).append(r)
+				for cid, chat_results in by_chat.items():
+					if not cid:
+						continue
+					summary = _format_results(
+						chat_results,
+						header="\U0001f4ca <b>Scheduled posts processed:</b>",
+					)
+					await _send_telegram_msg(bot_token, cid, summary)
+
+			if results:
+				logger.info(f"Background loop processed {len(results)} jobs")
+		except Exception as exc:
+			logger.error(f"Background queue loop error: {exc}", exc_info=True)
+
+
 @asynccontextmanager
 async def _lifespan(application: FastAPI):
 	"""Startup / shutdown lifecycle."""
 	_validate_config()
 	logger.info(f"Enabled platforms: {', '.join(settings.enabled_platforms) if settings.enabled_platforms else 'none'}")
 	logger.info(f"Loaded handlers: {', '.join(get_loaded_handlers())}")
+
+	# Launch the background queue-processing loop
+	task = asyncio.create_task(_queue_processing_loop())
+	logger.info(f"Background queue processor started (interval={_QUEUE_POLL_INTERVAL}s)")
+
 	yield
+
+	# Shutdown: cancel the background task
+	task.cancel()
+	try:
+		await task
+	except asyncio.CancelledError:
+		pass
 
 
 app = FastAPI(title="Forwardr", lifespan=_lifespan)

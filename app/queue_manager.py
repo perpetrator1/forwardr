@@ -2,6 +2,7 @@
 Queue manager for scheduling and processing social media posts
 """
 import json
+import os
 import sqlite3
 import logging
 import threading
@@ -594,13 +595,23 @@ class QueueManager:
 _queue_manager = None
 
 
+def _default_db_path() -> str:
+    """Return the database path from env or a sensible default.
+
+    On Render the persistent disk is mounted at /app/media, so set
+    DATABASE_PATH=/app/media/forwardr.db in the Render dashboard to
+    survive free-tier spin-downs.
+    """
+    return os.environ.get("DATABASE_PATH", "./forwardr.db")
+
+
 def get_queue_manager(
-    db_path: str = "./forwardr.db",
+    db_path: str | None = None,
 ) -> QueueManager:
     """Get or create queue manager singleton"""
     global _queue_manager
-    
+
     if _queue_manager is None:
-        _queue_manager = QueueManager(db_path)
-    
+        _queue_manager = QueueManager(db_path or _default_db_path())
+
     return _queue_manager

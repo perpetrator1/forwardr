@@ -26,7 +26,21 @@ class MediaInfo:
     width: Optional[int] = None
     height: Optional[int] = None
     file_size: Optional[int] = None
-    
+
+    def __init__(self, type: str, **kwargs):
+        """Accept (and discard) unknown fields so that jobs stored with
+        extra keys like ``scheduled_publish_time`` can still be
+        deserialised without crashing."""
+        known = {f.name for f in self.__dataclass_fields__.values()}
+        self.type = type
+        for name in known:
+            if name == "type":
+                continue
+            setattr(self, name, kwargs.get(name, self.__dataclass_fields__[name].default))
+        unknown = set(kwargs) - known
+        if unknown:
+            logger.debug(f"MediaInfo: ignoring unknown fields: {unknown}")
+
     def to_dict(self) -> Dict:
         """Convert to dictionary"""
         return asdict(self)
