@@ -291,7 +291,12 @@ async function handleCommand(env, chatId, text) {
         }
 
         if (health.next_scheduled) {
-          msg += `\n*Next scheduled:* ${health.next_scheduled} IST`;
+          const ns = health.next_scheduled.replace("T", " ").slice(0, 16);
+          const [datePart, timePart] = ns.split(" ");
+          const [year, month, day] = datePart.split("-");
+          const monthNames = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+          const monthName = monthNames[parseInt(month, 10) - 1];
+          msg += `\n*Next scheduled:* ${monthName} ${day}, ${timePart} IST`;
         }
 
         return msg;

@@ -11,6 +11,6 @@ binding = "CREDENTIALS"
 id = "f490887adf624e629612fdeddf76212a"
 
 # Cron trigger: check for due posts every hour
-# The actual post spacing is controlled by /setinterval (default: 5 hours)
+# The actual post spacing is controlled by /setinterval
 [triggers]
 crons = ["0 * * * *"]
