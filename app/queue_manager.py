@@ -34,6 +34,9 @@ class QueueManager:
         """
         self.db_path = db_path
         self._lock = threading.Lock()
+
+        # Ensure the parent directory exists (e.g. /app/media on Render)
+        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         
         # Initialize database
         self._init_db()
