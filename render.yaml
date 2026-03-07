@@ -4,18 +4,12 @@ services:
     runtime: docker
     plan: free
     dockerfilePath: ./Dockerfile
-    disk:
-      name: media-disk
-      mountPath: /app/media
-      sizeGB: 1
     envVars:
       - key: ENVIRONMENT
         sync: false
       - key: API_SECRET_KEY
         sync: false
       - key: CLOUDFLARE_WORKER_URL
-        sync: false
-      - key: DATABASE_PATH
         sync: false
       - key: TURSO_DATABASE_URL
         sync: false
