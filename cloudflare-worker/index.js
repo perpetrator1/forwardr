@@ -6,7 +6,7 @@
  * 2. Owner-only filtering — only process messages from TELEGRAM_OWNER_ID
  * 3. Handle Telegram bot commands (/setcred, /getcreds, /status, /help)
  *    and store credentials in Cloudflare KV
- * 4. Cron trigger — wake the Render server and process the queue every 5 hours
+ * 4. Cron trigger — wake the Render server and process the queue after /setinterval
  * 5. Expose /credentials endpoint so the Render server can fetch stored creds
  */
 
@@ -475,23 +475,25 @@ async function handleCommand(env, chatId, text) {
 
 /**
  * Wait for the Render server to become ready (handles free-tier cold starts).
- * Polls /health with increasing backoff up to ~2 minutes total.
+ * Polls /health with short intervals first (to catch fast startups) then
+ * increasing backoff.  Total wait is ~90 seconds which fits comfortably
+ * inside Cloudflare Worker wall-clock limits.
  */
 async function waitForRender(env) {
   const healthUrl = `${env.RENDER_URL.replace(/\/$/, "")}/health`;
-  const maxAttempts = 8;
+  // Intervals in ms between attempts.  Aggressive early, then back off.
+  const intervals = [2000, 3000, 5000, 8000, 10000, 12000, 15000, 15000, 15000];
 
-  for (let i = 0; i < maxAttempts; i++) {
+  for (let i = 0; i < intervals.length; i++) {
     try {
       const resp = await fetch(healthUrl, {
-        signal: AbortSignal.timeout(10000),
+        signal: AbortSignal.timeout(8000),
       });
       if (resp.ok) return; // Server is ready
     } catch {
       // timeout or network error — server still spinning up
     }
-    // Linear backoff: 5s, 10s, 15s, 20s … (~2.5 min total)
-    await new Promise((r) => setTimeout(r, 5000 * (i + 1)));
+    await new Promise((r) => setTimeout(r, intervals[i]));
   }
 
   throw new Error("Render server did not become ready after retries");
@@ -549,22 +551,48 @@ async function triggerQueueProcessing(env) {
 // Failed update storage & replay
 // ---------------------------------------------------------------------------
 
+async function storePending(env, updateId, payload) {
+  if (!env.FAILED_UPDATES) return;
+  const key = `pending:${updateId}`;
+  await env.FAILED_UPDATES.put(key, JSON.stringify(payload));
+}
+
+async function removePending(env, updateId) {
+  if (!env.FAILED_UPDATES) return;
+  await env.FAILED_UPDATES.delete(`pending:${updateId}`);
+}
+
+/** @deprecated kept for backward compat — old "failed:" keys are replayed too */
 async function storeFailed(env, updateId, payload) {
   if (!env.FAILED_UPDATES) return;
   const key = `failed:${updateId}`;
   await env.FAILED_UPDATES.put(key, JSON.stringify(payload));
 }
 
-async function replayFailed(env) {
+/**
+ * Replay all pending/failed updates stored in KV.
+ * Handles both old "failed:" keys and new "pending:" keys.
+ */
+async function replayPending(env) {
   if (!env.FAILED_UPDATES) {
     return { replayed: 0, failed: 0, remaining: 0 };
   }
 
-  const list = await env.FAILED_UPDATES.list({ prefix: "failed:" });
+  // Gather both old "failed:" keys and new "pending:" keys
+  const [failedList, pendingList] = await Promise.all([
+    env.FAILED_UPDATES.list({ prefix: "failed:" }),
+    env.FAILED_UPDATES.list({ prefix: "pending:" }),
+  ]);
+  const allKeys = [...failedList.keys, ...pendingList.keys];
+
+  if (allKeys.length === 0) {
+    return { replayed: 0, failed: 0, remaining: 0 };
+  }
+
   let replayed = 0;
   let failed = 0;
 
-  for (const item of list.keys) {
+  for (const item of allKeys) {
     const raw = await env.FAILED_UPDATES.get(item.name);
     if (!raw) continue;
 
@@ -585,8 +613,11 @@ async function replayFailed(env) {
     }
   }
 
-  const remaining = (await env.FAILED_UPDATES.list({ prefix: "failed:" })).keys
-    .length;
+  const [r1, r2] = await Promise.all([
+    env.FAILED_UPDATES.list({ prefix: "failed:" }),
+    env.FAILED_UPDATES.list({ prefix: "pending:" }),
+  ]);
+  const remaining = r1.keys.length + r2.keys.length;
   return { replayed, failed, remaining };
 }
 
@@ -601,9 +632,9 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    // GET /retry — replay failed updates
+    // GET /retry — replay pending/failed updates
     if (request.method === "GET" && url.pathname === "/retry") {
-      const summary = await replayFailed(env);
+      const summary = await replayPending(env);
       return new Response(JSON.stringify(summary), {
         status: 200,
         headers: { "Content-Type": "application/json" },
@@ -690,23 +721,35 @@ export default {
       return new Response("OK", { status: 200 });
     }
 
-    // Not a command — forward media/text to Render for queuing
+    // Not a command — forward media/text to Render for queuing.
+    // Write-ahead: store in KV FIRST so the update survives even if this
+    // Worker gets killed during the Render cold-start wait.
     ctx.waitUntil(
       (async () => {
+        // 1. Persist update to KV immediately (write-ahead log)
+        await storePending(env, updateId, payload);
+
         try {
+          // 2. Try to forward to Render (will wait for cold start)
           await forwardToRender(env, payload);
-          // Server is now awake — replay any previously failed updates
+
+          // 3. Forward succeeded — remove from KV
+          await removePending(env, updateId);
+
+          // 4. Server is awake — replay any previously stored updates
           try {
-            const replay = await replayFailed(env);
+            const replay = await replayPending(env);
             if (replay.replayed > 0) {
-              console.log(`Replayed ${replay.replayed} previously failed updates`);
+              console.log(`Replayed ${replay.replayed} previously pending updates`);
             }
           } catch (e) {
-            console.error("Failed replay:", e.message);
+            console.error("Replay error:", e.message);
           }
         } catch (err) {
-          console.error("Forward to Render failed:", err.message);
-          await storeFailed(env, updateId, payload);
+          // Forward failed (Worker timeout / Render unreachable) —
+          // the update is already safe in KV and will be retried by
+          // the next request or the cron trigger.
+          console.error("Forward to Render failed (update saved to KV):", err.message);
         }
       })()
     );
@@ -721,10 +764,10 @@ export default {
     ctx.waitUntil(
       (async () => {
         try {
-          // Replay any failed updates first
-          const replay = await replayFailed(env);
+          // Replay any pending/failed updates first
+          const replay = await replayPending(env);
           if (replay.replayed > 0) {
-            console.log(`Replayed ${replay.replayed} failed updates`);
+            console.log(`Replayed ${replay.replayed} pending updates`);
           }
 
           // Process all due jobs

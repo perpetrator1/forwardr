@@ -6,7 +6,7 @@ Automate your social media posting across multiple platforms with a single messa
 
 - Send media to a Telegram bot to trigger automated posting
 - **Owner-only** — only your Telegram account can use the bot
-- **Cron-based queue** — Cloudflare Worker wakes the server every 5 hours to post the oldest queued item
+- **Cron-based queue** — Cloudflare Worker wakes the server hourly; background loop also processes every 60s
 - **Telegram credential management** — set platform credentials via bot commands, stored in Cloudflare KV
 - Multi-platform support:
   - Telegram Channel
@@ -18,7 +18,8 @@ Automate your social media posting across multiple platforms with a single messa
   - Reddit
   - YouTube
 - Automatic retry on failures
-- SQLite-based job queue
+- Turso-backed persistent job queue (with local SQLite fallback)
+- Cloudinary media storage (survives container restarts)
 - Cloudflare Worker webhook receiver
 - Deployed on Render.com free tier
 
@@ -32,7 +33,7 @@ Automate your social media posting across multiple platforms with a single messa
                           │  • Bot commands        │──────▶ Cloudflare KV
                           │    (/setcred, /help…) │         (credentials)
                           │  • Forward media       │
-                          │  • Cron (every 5h)     │
+                          │  • Cron trigger        │
                           └──────┬────────────┬────┘
                                  │            │
                           /webhook      /process-queue
@@ -40,8 +41,10 @@ Automate your social media posting across multiple platforms with a single messa
                           ┌──────▼────────────▼────┐
                           │  FastAPI on Render.com  │
                           │                        │
-                          │  • Queue media (SQLite) │
-                          │  • Process oldest job   │
+                          │  • Download media       │
+                          │  • Upload to Cloudinary │──▶ Cloudinary (media CDN)
+                          │  • Queue jobs (Turso)   │──▶ Turso (persistent DB)
+                          │  • Background loop 60s  │
                           │  • Post to platforms    │
                           └────────────────────────┘
 ```
@@ -49,9 +52,10 @@ Automate your social media posting across multiple platforms with a single messa
 **Flow:**
 1. You send a photo/video/text to the Telegram bot
 2. Cloudflare Worker checks you're the owner, forwards to Render
-3. FastAPI downloads the media and queues jobs for all enabled platforms
-4. Every 5 hours, the CF Worker cron wakes the server and triggers `/process-queue`
-5. The server processes the oldest pending job and posts to that platform
+3. FastAPI downloads the media, uploads it to Cloudinary, and queues jobs in Turso for all enabled platforms
+4. The background loop (every 60s) or CF Worker cron processes due jobs
+5. At processing time, media is fetched from Cloudinary if the local file is gone (ephemeral container)
+6. After all platforms finish posting for a submission, Cloudinary media is deleted automatically
 
 ## Prerequisites
 
@@ -95,11 +99,20 @@ Edit `.env` and fill in your credentials. At minimum, you need:
 - `API_SECRET_KEY` - Generate a secure random string
 - `CLOUDFLARE_WORKER_URL` - Your deployed worker URL
 
-### 5. Initialize Database
+### 5. Set Up Turso Database (Production)
 
 ```bash
-python scripts/init_db.py
+# Install Turso CLI
+curl -sSfL https://get.tur.so/install.sh | bash
+turso auth login
+
+# Create database and get credentials
+turso db create forwardr
+turso db show forwardr --url    # → TURSO_DATABASE_URL
+turso db tokens create forwardr  # → TURSO_AUTH_TOKEN
 ```
+
+Add `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` to your Render environment variables. Without them, the app falls back to local SQLite.
 
 ### 6. Run Locally (Development)
 
