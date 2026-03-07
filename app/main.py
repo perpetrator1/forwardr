@@ -147,10 +147,18 @@ async def _process_webhook(update: Dict) -> None:
 
 		platforms = determine_platforms(media_info.to_dict())
 		if not platforms:
-			logger.warning("No available platforms for this media type")
-			await _send_telegram_msg(bot_token, chat_id,
-				"\u26a0\ufe0f No platforms configured for this media type.\n"
-				"Use /getcreds to check your setup.")
+			enabled = settings.enabled_platforms
+			logger.warning(f"No available platforms for this media type. Enabled: {enabled}")
+			if chat_id:
+				if not enabled:
+					await _send_telegram_msg(bot_token, chat_id,
+						"⚠️ <b>No platforms configured.</b>\n"
+						"Use /getcreds to check your credentials, or /setcred to add them.")
+				else:
+					platform_list = ", ".join(enabled)
+					await _send_telegram_msg(bot_token, chat_id,
+						f"⚠️ None of your configured platforms ({platform_list}) "
+						f"support <b>{media_info.type}</b> posts.")
 			return
 
 		qm = _get_qm()
@@ -196,6 +204,18 @@ async def _process_webhook(update: Dict) -> None:
 
 	except Exception as exc:
 		logger.error(f"Webhook processing failed: {exc}", exc_info=True)
+		# Try to report the error back to the user via Telegram
+		try:
+			bot_token = settings.telegram.bot_token
+			message = (update.get("message") or update.get("edited_message")
+				or update.get("channel_post") or update.get("edited_channel_post"))
+			chat_id = str(message.get("chat", {}).get("id", "")) if message else ""
+			if bot_token and chat_id:
+				await _send_telegram_msg(bot_token, chat_id,
+					f"❌ <b>Error processing your message:</b>\n<code>{exc}</code>\n\n"
+					"Check /status for server health.")
+		except Exception:
+			pass
 
 
 _QUEUE_POLL_INTERVAL = int(os.getenv("QUEUE_POLL_INTERVAL", "60"))  # seconds
@@ -242,8 +262,13 @@ async def _queue_processing_loop():
 async def _lifespan(application: FastAPI):
 	"""Startup / shutdown lifecycle."""
 	_validate_config()
-	logger.info(f"Enabled platforms: {', '.join(settings.enabled_platforms) if settings.enabled_platforms else 'none'}")
+	platforms_str = ', '.join(settings.enabled_platforms) if settings.enabled_platforms else 'NONE'
+	logger.info(f"Enabled platforms: {platforms_str}")
 	logger.info(f"Loaded handlers: {', '.join(get_loaded_handlers())}")
+	if not settings.telegram.bot_token:
+		logger.warning("TELEGRAM_BOT_TOKEN is not set — webhook processing will not work!")
+	if not settings.enabled_platforms:
+		logger.warning("No platforms enabled at startup — check credentials via /setcred")
 
 	# Launch the background queue-processing loop
 	task = asyncio.create_task(_queue_processing_loop())
@@ -338,6 +363,28 @@ def health() -> Dict:
 		"next_scheduled": next_scheduled,
 		"enabled_platforms": settings.enabled_platforms,
 		"post_interval_hours": settings.post_interval_hours,
+	}
+
+
+@app.get("/diagnostics")
+def diagnostics(
+	x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+) -> Dict:
+	"""Detailed diagnostic info — requires API key."""
+	_validate_api_key(x_api_key)
+	from app.utils.cloudinary_config import CLOUDINARY_AVAILABLE
+	turso_url = os.getenv("TURSO_DATABASE_URL", "")
+	cw_url = os.getenv("CLOUDFLARE_WORKER_URL", "")
+	return {
+		"telegram_bot_token_set": bool(settings.telegram.bot_token),
+		"telegram_owner_id_set": bool(settings.telegram.owner_id or os.getenv("TELEGRAM_OWNER_ID")),
+		"cloudflare_worker_url_set": bool(cw_url),
+		"turso_configured": bool(turso_url and os.getenv("TURSO_AUTH_TOKEN")),
+		"cloudinary_available": CLOUDINARY_AVAILABLE,
+		"cloudinary_configured": bool(os.getenv("CLOUDINARY_CLOUD_NAME")),
+		"enabled_platforms": settings.enabled_platforms,
+		"post_interval_hours": settings.post_interval_hours,
+		"api_key_set": bool(_get_expected_api_key()),
 	}
 
 
