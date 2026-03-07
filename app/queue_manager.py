@@ -615,6 +615,9 @@ def get_queue_manager(
     global _queue_manager
 
     if _queue_manager is None:
-        _queue_manager = QueueManager(db_path or _default_db_path())
+        resolved = db_path or _default_db_path()
+        resolved_abs = str(Path(resolved).resolve())
+        logger.info(f"Initialising QueueManager with db_path={resolved} (resolved: {resolved_abs})")
+        _queue_manager = QueueManager(resolved)
 
     return _queue_manager

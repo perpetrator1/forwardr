@@ -305,9 +305,18 @@ async def process_queue(
 
 @app.get("/health")
 def health() -> Dict:
-	qm = _get_qm()
-	status_counts = qm.get_queue_status()
-	next_scheduled = qm.get_next_scheduled_time()
+	try:
+		qm = _get_qm()
+		status_counts = qm.get_queue_status()
+		next_scheduled = qm.get_next_scheduled_time()
+	except Exception as exc:
+		logger.error(f"Health check: DB unavailable: {exc}")
+		return {
+			"status": "degraded",
+			"error": str(exc),
+			"enabled_platforms": settings.enabled_platforms,
+			"post_interval_hours": settings.post_interval_hours,
+		}
 	return {
 		"status": "ok",
 		"queue": status_counts,
