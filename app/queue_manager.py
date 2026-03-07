@@ -32,14 +32,37 @@ class QueueManager:
         Args:
             db_path: Path to SQLite database
         """
-        self.db_path = db_path
+        self.db_path = self._resolve_writable_path(db_path)
         self._lock = threading.Lock()
-
-        # Ensure the parent directory exists (e.g. /app/media on Render)
-        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         
         # Initialize database
         self._init_db()
+
+    @staticmethod
+    def _resolve_writable_path(db_path: str) -> str:
+        """Ensure the parent directory exists and is writable.
+
+        If the configured path can't be used (e.g. Render free tier has no
+        persistent disk), fall back to ``./forwardr.db`` in the working
+        directory.
+        """
+        preferred = Path(db_path)
+        try:
+            preferred.parent.mkdir(parents=True, exist_ok=True)
+            # Quick write-test — catches permission issues early
+            test_file = preferred.parent / ".db_write_test"
+            test_file.touch()
+            test_file.unlink()
+            logger.info(f"Using database path: {preferred}")
+            return str(preferred)
+        except OSError as exc:
+            fallback = Path("./forwardr.db")
+            logger.warning(
+                f"Cannot use {preferred} ({exc}). "
+                f"Falling back to {fallback.resolve()}"
+            )
+            fallback.parent.mkdir(parents=True, exist_ok=True)
+            return str(fallback)
     
     @contextmanager
     def _get_connection(self):
