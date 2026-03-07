@@ -482,10 +482,10 @@ class Settings:
         for platform_name, platform_config in self._platforms.items():
             if platform_config.is_complete():
                 enabled.append(platform_name)
-                logger.info(f"{platform_name.capitalize()} platform enabled")
+                logger.debug(f"{platform_name.capitalize()} platform enabled")
             else:
                 missing = platform_config.get_missing_fields()
-                logger.warning(
+                logger.debug(
                     f"{platform_name.capitalize()} platform disabled - "
                     f"missing: {', '.join(missing)}"
                 )
@@ -563,14 +563,14 @@ class Settings:
         self._reinit_platforms()
         kv_creds = _fetch_kv_credentials()
         self._apply_kv_and_validate(kv_creds)
-        logger.info(f"Config refreshed (sync). Enabled platforms: {', '.join(self.enabled_platforms) or 'none'}")
+        logger.debug(f"Config refreshed (sync). Enabled platforms: {', '.join(self.enabled_platforms) or 'none'}")
 
     async def refresh_async(self) -> None:
         """Async version of refresh() — avoids blocking the event loop."""
         self._reinit_platforms()
         kv_creds = await _fetch_kv_credentials_async()
         self._apply_kv_and_validate(kv_creds)
-        logger.info(f"Config refreshed (async). Enabled platforms: {', '.join(self.enabled_platforms) or 'none'}")
+        logger.debug(f"Config refreshed (async). Enabled platforms: {', '.join(self.enabled_platforms) or 'none'}")
 
 
 # Create singleton settings instance

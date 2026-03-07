@@ -595,6 +595,44 @@ class QueueManager:
             """, (new_time.isoformat(), datetime.utcnow().isoformat(), job_id))
             
         logger.info(f"Job #{job_id} rescheduled for {new_time.isoformat()}")
+
+    def _ensure_media_downloaded(self, media_info: MediaInfo) -> MediaInfo:
+        """Re-download media from Telegram if the local file is missing.
+
+        On ephemeral hosts (e.g. Render free tier) the file system is wiped
+        between container restarts, but the ``file_id`` stored in the job is
+        still valid for ~1 hour after the original message was received.
+
+        Returns an updated :class:`MediaInfo` with ``local_path`` set.
+        """
+        import asyncio
+        from app.config import settings
+
+        bot_token = settings.telegram.bot_token
+        if not bot_token:
+            raise RuntimeError("Cannot re-download media: Telegram bot token missing")
+
+        handler = MediaHandler(bot_token, settings.core.media_path)
+
+        # download_telegram_media is async — run it from sync context
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            # We're inside an existing event loop (e.g. FastAPI background task).
+            # Create a new thread to run the coroutine.
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                media_info = pool.submit(
+                    asyncio.run, handler.download_telegram_media(media_info)
+                ).result(timeout=60)
+        else:
+            media_info = asyncio.run(handler.download_telegram_media(media_info))
+
+        logger.info(f"Re-downloaded media to {media_info.local_path}")
+        return media_info
     
     def process_job(self, job: Dict) -> bool:
         """
@@ -615,6 +653,16 @@ class QueueManager:
             # Parse media info
             media_info_dict = json.loads(job['media_info'])
             media_info = MediaInfo(**media_info_dict)
+
+            # Re-download media if the local file is missing
+            # (Render free tier wipes the filesystem on spin-down)
+            if media_info.type != "text" and media_info.file_id:
+                needs_download = (
+                    not media_info.local_path
+                    or not Path(media_info.local_path).exists()
+                )
+                if needs_download:
+                    media_info = self._ensure_media_downloaded(media_info)
             
             # Import platform router
             from app.services.platforms import post_to_platform
