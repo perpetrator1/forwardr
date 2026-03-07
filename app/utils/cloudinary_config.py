@@ -82,6 +82,26 @@ def upload_media(file_path: str, resource_type: str = 'auto') -> Optional[str]:
         >>> print(url)
         'https://res.cloudinary.com/your-cloud/image/upload/v1234567890/abc123.jpg'
     """
+    result = upload_media_with_id(file_path, resource_type)
+    return result.get("url") if result else None
+
+
+def upload_media_with_id(file_path: str, resource_type: str = 'auto') -> Optional[dict]:
+    """
+    Upload media to Cloudinary and get both public URL and public_id.
+    
+    Args:
+        file_path: Local path to the media file
+        resource_type: 'image', 'video', or 'auto' (default)
+        
+    Returns:
+        Dict with 'url', 'public_id', and 'resource_type', or None if upload failed
+        
+    Example:
+        >>> result = upload_media_with_id('/path/to/image.jpg')
+        >>> print(result)
+        {'url': 'https://res.cloudinary.com/...', 'public_id': 'forwardr/abc123', 'resource_type': 'image'}
+    """
     if not CLOUDINARY_AVAILABLE:
         logger.error("Cloudinary not available - cannot upload media")
         return None
@@ -105,12 +125,18 @@ def upload_media(file_path: str, resource_type: str = 'auto') -> Optional[str]:
         )
         
         public_url = result.get('secure_url')
+        public_id = result.get('public_id')
+        actual_resource_type = result.get('resource_type', resource_type)
         
-        if public_url:
-            logger.info(f"Media uploaded successfully: {public_url}")
-            return public_url
+        if public_url and public_id:
+            logger.info(f"Media uploaded successfully: {public_url} (id: {public_id})")
+            return {
+                "url": public_url,
+                "public_id": public_id,
+                "resource_type": actual_resource_type,
+            }
         else:
-            logger.error("Upload succeeded but no URL returned")
+            logger.error("Upload succeeded but missing URL or public_id")
             return None
             
     except Exception as e:

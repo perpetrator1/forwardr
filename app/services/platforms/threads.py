@@ -335,15 +335,18 @@ def post(media_info: Dict) -> Optional[str]:
         # --- Media ---------------------------------------------------------------
         image_url = video_url = None
 
-        if media_type == 'photo' and local_path:
-            image_url = _upload_media_to_public_url(local_path)
+        # Use pre-uploaded Cloudinary URL if available (from queue-time upload)
+        cloudinary_url = media_info.get('cloudinary_url')
+
+        if media_type == 'photo' and (local_path or cloudinary_url):
+            image_url = cloudinary_url or _upload_media_to_public_url(local_path)
             if not image_url:
                 logger.warning("Threads: Media upload failed, falling back to text-only post")
                 if not text:
                     logger.error("Threads: Cannot fall back to text-only — caption is empty")
                     return None
-        elif media_type == 'video' and local_path:
-            video_url = _upload_media_to_public_url(local_path)
+        elif media_type == 'video' and (local_path or cloudinary_url):
+            video_url = cloudinary_url or _upload_media_to_public_url(local_path)
             if not video_url:
                 logger.warning("Threads: Media upload failed, falling back to text-only post")
                 if not text:
@@ -369,11 +372,13 @@ def post(media_info: Dict) -> Optional[str]:
         post_url = f"https://www.threads.net/t/{post_id}"
         logger.info(f"Threads: Posted successfully — {post_url}")
 
-        # --- Cleanup Cloudinary --------------------------------------------------
-        if image_url:
-            _cleanup_cloudinary(image_url, is_video=False)
-        elif video_url:
-            _cleanup_cloudinary(video_url, is_video=True)
+        # Cloudinary cleanup is handled by QueueManager._cleanup_completed_media()
+        # Only clean up here if Threads did its own upload (no pre-uploaded URL)
+        if not cloudinary_url:
+            if image_url:
+                _cleanup_cloudinary(image_url, is_video=False)
+            elif video_url:
+                _cleanup_cloudinary(video_url, is_video=True)
 
         return post_url
 

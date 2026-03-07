@@ -130,6 +130,21 @@ async def _process_webhook(update: Dict) -> None:
 		if media_info.type != "text":
 			media_info = await handler.download_telegram_media(media_info)
 
+			# Upload to Cloudinary for persistent storage (survives container restarts)
+			if media_info.local_path:
+				try:
+					from app.utils.cloudinary_config import upload_media_with_id, CLOUDINARY_AVAILABLE
+					if CLOUDINARY_AVAILABLE:
+						ext = media_info.local_path.rsplit('.', 1)[-1].lower()
+						resource_type = 'video' if ext in ('mp4', 'mov', 'avi', 'mkv') else 'image'
+						result = upload_media_with_id(media_info.local_path, resource_type)
+						if result:
+							media_info.cloudinary_url = result["url"]
+							media_info.cloudinary_public_id = result["public_id"]
+							logger.info(f"Media uploaded to Cloudinary: {result['public_id']}")
+				except Exception as e:
+					logger.warning(f"Cloudinary upload failed (will use local): {e}")
+
 		platforms = determine_platforms(media_info.to_dict())
 		if not platforms:
 			logger.warning("No available platforms for this media type")

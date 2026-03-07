@@ -324,8 +324,15 @@ def post(media_info: Dict) -> Optional[str]:
             caption = caption[: CAPTION_MAX_LENGTH - 3] + "..."
 
         # Instagram requires media — skip text-only posts
-        if media_type == "text" or not local_path:
+        if media_type == "text":
             logger.warning("Instagram: Skipping — Graph API requires an image or video")
+            return None
+
+        # Use pre-uploaded Cloudinary URL if available (from queue-time upload)
+        cloudinary_url = media_info.get("cloudinary_url")
+
+        if not local_path and not cloudinary_url:
+            logger.warning("Instagram: Skipping — no local_path or cloudinary_url")
             return None
 
         logger.info(
@@ -337,9 +344,10 @@ def post(media_info: Dict) -> Optional[str]:
         image_url = video_url = None
         is_video = media_type == "video"
 
-        public_url = _upload_media_to_public_url(local_path)
+        # Reuse pre-uploaded Cloudinary URL, or upload now if not available
+        public_url = cloudinary_url or _upload_media_to_public_url(local_path)
         if not public_url:
-            logger.error("Instagram: Failed to upload media to public URL")
+            logger.error("Instagram: Failed to get a public URL for media")
             return None
 
         if is_video:
@@ -372,8 +380,10 @@ def post(media_info: Dict) -> Optional[str]:
             permalink = f"https://www.instagram.com/p/{media_id}"
             logger.info(f"Instagram: Posted successfully — media_id={media_id}")
 
-        # --- Cleanup Cloudinary --------------------------------------------------
-        _cleanup_cloudinary(public_url, is_video=is_video)
+        # Cloudinary cleanup is handled by QueueManager._cleanup_completed_media()
+        # Only clean up here if Instagram did its own upload (no pre-uploaded URL)
+        if not cloudinary_url:
+            _cleanup_cloudinary(public_url, is_video=is_video)
 
         return permalink
 

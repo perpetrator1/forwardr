@@ -26,6 +26,8 @@ class MediaInfo:
     width: Optional[int] = None
     height: Optional[int] = None
     file_size: Optional[int] = None
+    cloudinary_url: Optional[str] = None
+    cloudinary_public_id: Optional[str] = None
 
     def __init__(self, type: str, **kwargs):
         """Accept (and discard) unknown fields so that jobs stored with

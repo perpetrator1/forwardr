@@ -597,17 +597,29 @@ class QueueManager:
         logger.info(f"Job #{job_id} rescheduled for {new_time.isoformat()}")
 
     def _ensure_media_downloaded(self, media_info: MediaInfo) -> MediaInfo:
-        """Re-download media from Telegram if the local file is missing.
+        """Re-download media if the local file is missing.
 
-        On ephemeral hosts (e.g. Render free tier) the file system is wiped
-        between container restarts, but the ``file_id`` stored in the job is
-        still valid for ~1 hour after the original message was received.
+        Tries in order:
+        1. Cloudinary URL (persistent, no expiration)
+        2. Telegram file_id (valid ~1 hour after original message)
 
         Returns an updated :class:`MediaInfo` with ``local_path`` set.
         """
         import asyncio
         from app.config import settings
 
+        # Try Cloudinary first (more reliable)
+        if media_info.cloudinary_url:
+            try:
+                local_path = self._download_from_cloudinary(media_info)
+                if local_path:
+                    media_info.local_path = local_path
+                    logger.info(f"Re-downloaded media from Cloudinary to {local_path}")
+                    return media_info
+            except Exception as e:
+                logger.warning(f"Cloudinary download failed, trying Telegram: {e}")
+
+        # Fall back to Telegram file_id
         bot_token = settings.telegram.bot_token
         if not bot_token:
             raise RuntimeError("Cannot re-download media: Telegram bot token missing")
@@ -631,8 +643,35 @@ class QueueManager:
         else:
             media_info = asyncio.run(handler.download_telegram_media(media_info))
 
-        logger.info(f"Re-downloaded media to {media_info.local_path}")
+        logger.info(f"Re-downloaded media from Telegram to {media_info.local_path}")
         return media_info
+
+    def _download_from_cloudinary(self, media_info: MediaInfo) -> Optional[str]:
+        """Download media from Cloudinary URL to local path."""
+        import httpx
+        from app.config import settings
+
+        url = media_info.cloudinary_url
+        if not url:
+            return None
+
+        # Determine filename from URL or file_id
+        ext = url.rsplit('.', 1)[-1].split('?')[0]  # Handle query params
+        if not ext or len(ext) > 5:
+            ext = 'jpg' if media_info.type == 'photo' else 'mp4'
+        filename = f"{media_info.file_id or 'cloudinary'}.{ext}"
+
+        media_dir = Path(settings.core.media_path)
+        media_dir.mkdir(parents=True, exist_ok=True)
+        local_path = media_dir / filename
+
+        with httpx.Client(timeout=60.0) as client:
+            resp = client.get(url)
+            resp.raise_for_status()
+            with open(local_path, 'wb') as f:
+                f.write(resp.content)
+
+        return str(local_path)
     
     def process_job(self, job: Dict) -> bool:
         """
@@ -736,10 +775,25 @@ class QueueManager:
                     media_info_dict = json.loads(row['media_info'])
                     media_info = MediaInfo(**media_info_dict)
                     
+                    # Clean up local file
                     if media_info.local_path and Path(media_info.local_path).exists():
                         handler = MediaHandler(bot_token="", media_dir="./media")
                         handler.cleanup_media(media_info)
-                        logger.info(f"Cleaned up media for file_id: {file_id}")
+                        logger.info(f"Cleaned up local media for file_id: {file_id}")
+
+                    # Clean up Cloudinary
+                    if media_info.cloudinary_public_id:
+                        try:
+                            from app.utils.cloudinary_config import delete_media, CLOUDINARY_AVAILABLE
+                            if CLOUDINARY_AVAILABLE:
+                                # Determine resource type from media type
+                                resource_type = 'video' if media_info.type == 'video' else 'image'
+                                if delete_media(media_info.cloudinary_public_id, resource_type):
+                                    logger.info(f"Deleted from Cloudinary: {media_info.cloudinary_public_id}")
+                                else:
+                                    logger.warning(f"Failed to delete from Cloudinary: {media_info.cloudinary_public_id}")
+                        except Exception as ce:
+                            logger.warning(f"Cloudinary cleanup failed for {file_id}: {ce}")
                         
             except Exception as e:
                 logger.error(f"Failed to cleanup file_id {file_id}: {e}")
