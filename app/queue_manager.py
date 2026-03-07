@@ -335,6 +335,14 @@ class QueueManager:
                 ON jobs(created_at)
             """)
 
+            # Metadata table for persisting state across job deletions
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS metadata (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+            """)
+
             # Migration: add chat_id column for Telegram notifications
             try:
                 conn.execute("ALTER TABLE jobs ADD COLUMN chat_id TEXT")
@@ -372,8 +380,8 @@ class QueueManager:
         now = _now_ist()
         
         with self._get_connection() as conn:
-            # Find the latest scheduled_time across pending jobs
-            # (completed/cancelled jobs are deleted after processing)
+            # Check pending jobs first, then fall back to the persisted
+            # last_scheduled_time (which survives completed-job deletion).
             cursor = conn.execute("""
                 SELECT MAX(scheduled_time) as latest
                 FROM jobs 
@@ -381,6 +389,26 @@ class QueueManager:
             """)
             row = cursor.fetchone()
             latest = row['latest'] if row and row['latest'] else None
+
+            if not latest:
+                # No pending jobs — check metadata for the last time we
+                # actually scheduled something (persists after deletion).
+                cursor = conn.execute(
+                    "SELECT value FROM metadata WHERE key = 'last_scheduled_time'"
+                )
+                meta = cursor.fetchone()
+                if meta and interval_hours > 0:
+                    meta_dt = datetime.fromisoformat(meta['value'])
+                    # Only use it if it's recent enough to matter for spacing.
+                    # If the interval has already fully elapsed, discard it —
+                    # no point keeping stale data.
+                    if now - meta_dt < timedelta(hours=interval_hours):
+                        latest = meta['value']
+                    else:
+                        # Stale — clean it up
+                        conn.execute(
+                            "DELETE FROM metadata WHERE key = 'last_scheduled_time'"
+                        )
             
             if latest and interval_hours > 0:
                 latest_dt = datetime.fromisoformat(latest)
@@ -415,6 +443,12 @@ class QueueManager:
                     f"Queued job #{job_id} for {platform} "
                     f"at {scheduled_time.isoformat()}"
                 )
+
+            # Persist the scheduled time so interval logic survives job deletion
+            conn.execute("""
+                INSERT INTO metadata (key, value) VALUES ('last_scheduled_time', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """, (scheduled_time.isoformat(),))
         
         return job_ids, scheduled_time
     
