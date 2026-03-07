@@ -1,5 +1,11 @@
 """
-Queue manager for scheduling and processing social media posts
+Queue manager for scheduling and processing social media posts.
+
+Supports two backends:
+- **Turso** (recommended for production) — set TURSO_DATABASE_URL and
+  TURSO_AUTH_TOKEN env vars.  Communicates via Turso's HTTP pipeline API
+  so there are **no native dependencies** (uses ``httpx``).
+- **Local SQLite** (fallback) — used when the Turso env vars are absent.
 """
 import json
 import os
@@ -8,13 +14,200 @@ import logging
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 from dataclasses import asdict
 from contextlib import contextmanager
+
+import httpx
 
 from app.media_handler import MediaInfo, MediaHandler
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Turso HTTP API helpers
+# ---------------------------------------------------------------------------
+
+
+def _turso_configured() -> bool:
+    """Return True when both Turso env vars are present."""
+    return bool(
+        os.environ.get("TURSO_DATABASE_URL")
+        and os.environ.get("TURSO_AUTH_TOKEN")
+    )
+
+
+class _TursoRow:
+    """Minimal dict-like row compatible with ``sqlite3.Row``.
+
+    Supports ``row['col']`` access and ``dict(row)`` conversion.
+    """
+
+    def __init__(self, columns: List[str], values: List[Any]):
+        self._data: Dict[str, Any] = dict(zip(columns, values))
+
+    def __getitem__(self, key: str) -> Any:
+        return self._data[key]
+
+    def keys(self):
+        return self._data.keys()
+
+    def values(self):
+        return self._data.values()
+
+    def items(self):
+        return self._data.items()
+
+    def __repr__(self) -> str:
+        return f"_TursoRow({self._data})"
+
+
+class _TursoCursor:
+    """Minimal cursor returned by :pymethod:`_TursoConnection.execute`."""
+
+    def __init__(
+        self,
+        columns: List[str],
+        rows: List[List[Any]],
+        last_insert_rowid: Optional[int],
+        affected_row_count: int,
+    ):
+        self._rows = [_TursoRow(columns, r) for r in rows]
+        self.lastrowid = last_insert_rowid
+        self.rowcount = affected_row_count
+        self._pos = 0
+
+    def fetchone(self) -> Optional[_TursoRow]:
+        if self._pos < len(self._rows):
+            row = self._rows[self._pos]
+            self._pos += 1
+            return row
+        return None
+
+    def fetchall(self) -> List[_TursoRow]:
+        remaining = self._rows[self._pos:]
+        self._pos = len(self._rows)
+        return remaining
+
+
+class _TursoConnection:
+    """Synchronous connection wrapper around the Turso HTTP pipeline API.
+
+    Each ``execute()`` call sends one HTTP request to
+    ``POST <db_url>/v2/pipeline``.  Auto-commit semantics — there is no
+    explicit transaction management.
+
+    Designed as a drop-in replacement for ``sqlite3.Connection`` inside
+    the ``_get_connection()`` context manager.
+    """
+
+    def __init__(self, base_url: str, auth_token: str):
+        # Accept libsql:// or https:// URLs
+        url = base_url.replace("libsql://", "https://")
+        if not url.startswith("https://"):
+            url = f"https://{url}"
+        self._pipeline_url = f"{url}/v2/pipeline"
+        self._auth_token = auth_token
+        self._client = httpx.Client(timeout=30.0)
+        # Compatibility: the caller sets conn.row_factory — ignored here
+        # because _TursoRow already provides dict-like access.
+        self.row_factory: Any = None
+
+    # -- execute --------------------------------------------------------------
+
+    def execute(
+        self, sql: str, params: Sequence[Any] = ()
+    ) -> _TursoCursor:
+        args = self._convert_params(params)
+        body = {
+            "requests": [
+                {
+                    "type": "execute",
+                    "stmt": {"sql": sql, "args": args},
+                },
+                {"type": "close"},
+            ]
+        }
+
+        resp = self._client.post(
+            self._pipeline_url,
+            json=body,
+            headers={"Authorization": f"Bearer {self._auth_token}"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        result = data["results"][0]
+        if result["type"] == "error":
+            msg = result["error"].get("message", "unknown Turso error")
+            # Raise sqlite3.OperationalError so existing except-clauses
+            # (e.g. the ALTER TABLE migration) keep working.
+            raise sqlite3.OperationalError(msg)
+
+        exec_result = result["response"]["result"]
+        columns = [c["name"] for c in exec_result.get("cols", [])]
+        rows: List[List[Any]] = []
+        for row in exec_result.get("rows", []):
+            rows.append([self._extract_value(v) for v in row])
+
+        return _TursoCursor(
+            columns,
+            rows,
+            exec_result.get("last_insert_rowid"),
+            exec_result.get("affected_row_count", 0),
+        )
+
+    # -- param / value conversion --------------------------------------------
+
+    @staticmethod
+    def _convert_params(params: Sequence[Any]) -> List[Dict[str, Any]]:
+        """Convert Python values to Turso HTTP API arg dicts."""
+        args: List[Dict[str, Any]] = []
+        for p in params:
+            if p is None:
+                args.append({"type": "null"})
+            elif isinstance(p, bool):
+                args.append({"type": "integer", "value": str(int(p))})
+            elif isinstance(p, int):
+                args.append({"type": "integer", "value": str(p)})
+            elif isinstance(p, float):
+                args.append({"type": "float", "value": p})
+            elif isinstance(p, bytes):
+                import base64
+                args.append(
+                    {"type": "blob", "base64": base64.b64encode(p).decode()}
+                )
+            else:
+                args.append({"type": "text", "value": str(p)})
+        return args
+
+    @staticmethod
+    def _extract_value(v: Dict[str, Any]) -> Any:
+        """Convert a Turso API value dict back to a Python type."""
+        vtype = v.get("type")
+        if vtype == "null":
+            return None
+        if vtype == "integer":
+            return int(v["value"])
+        if vtype == "float":
+            return float(v["value"])
+        if vtype == "text":
+            return v["value"]
+        if vtype == "blob":
+            import base64
+            return base64.b64decode(v["base64"])
+        return v.get("value")
+
+    # -- context-manager / lifecycle stubs ------------------------------------
+
+    def commit(self) -> None:
+        pass  # Auto-commit per pipeline request
+
+    def rollback(self) -> None:
+        pass  # No transaction state to roll back
+
+    def close(self) -> None:
+        self._client.close()
 
 
 class QueueManager:
@@ -25,16 +218,27 @@ class QueueManager:
     /process-queue endpoint which invokes this.
     """
     
-    def __init__(self, db_path: str = "./forwardr.db"):
+    def __init__(self, db_path: str = "./forwardr.db", turso_url: str | None = None, turso_token: str | None = None):
         """
-        Initialize queue manager
-        
+        Initialize queue manager.
+
         Args:
-            db_path: Path to SQLite database
+            db_path: Path to local SQLite database (used when Turso is not configured).
+            turso_url: Turso/libSQL database URL  (``libsql://…``).
+            turso_token: Turso auth token.
         """
-        self.db_path = self._resolve_writable_path(db_path)
         self._lock = threading.Lock()
-        
+        self._turso_url = turso_url
+        self._turso_token = turso_token
+
+        if self._turso_url:
+            # Turso mode — no local file needed
+            self.db_path = self._turso_url
+            logger.info(f"Using Turso database: {self._turso_url}")
+        else:
+            # Local SQLite mode
+            self.db_path = self._resolve_writable_path(db_path)
+
         # Initialize database
         self._init_db()
 
@@ -66,13 +270,21 @@ class QueueManager:
     
     @contextmanager
     def _get_connection(self):
-        """Get database connection with context manager"""
-        conn = sqlite3.connect(self.db_path, timeout=30.0)
-        conn.row_factory = sqlite3.Row
+        """Get database connection with context manager.
+
+        Uses :class:`_TursoConnection` (HTTP pipeline API) for Turso,
+        plain ``sqlite3`` otherwise.  Both expose the same
+        ``execute / fetchone / fetchall`` interface.
+        """
+        if self._turso_url:
+            conn = _TursoConnection(self._turso_url, self._turso_token)
+        else:
+            conn = sqlite3.connect(self.db_path, timeout=30.0)
+            conn.row_factory = sqlite3.Row
         try:
             yield conn
             conn.commit()
-        except Exception as e:
+        except Exception:
             conn.rollback()
             raise
         finally:
@@ -622,25 +834,35 @@ _queue_manager = None
 
 
 def _default_db_path() -> str:
-    """Return the database path from env or a sensible default.
-
-    On Render the persistent disk is mounted at /app/media, so set
-    DATABASE_PATH=/app/media/forwardr.db in the Render dashboard to
-    survive free-tier spin-downs.
-    """
+    """Return the local database path from env or a sensible default."""
     return os.environ.get("DATABASE_PATH", "./forwardr.db")
 
 
 def get_queue_manager(
     db_path: str | None = None,
 ) -> QueueManager:
-    """Get or create queue manager singleton"""
+    """Get or create queue manager singleton.
+
+    When TURSO_DATABASE_URL and TURSO_AUTH_TOKEN are set, the manager
+    connects to Turso.  Otherwise it falls back to local SQLite.
+    """
     global _queue_manager
 
     if _queue_manager is None:
+        turso_url = os.environ.get("TURSO_DATABASE_URL")
+        turso_token = os.environ.get("TURSO_AUTH_TOKEN")
+
         resolved = db_path or _default_db_path()
-        resolved_abs = str(Path(resolved).resolve())
-        logger.info(f"Initialising QueueManager with db_path={resolved} (resolved: {resolved_abs})")
-        _queue_manager = QueueManager(resolved)
+        if turso_url and turso_token:
+            logger.info(f"Initialising QueueManager with Turso: {turso_url}")
+            _queue_manager = QueueManager(
+                db_path=resolved,
+                turso_url=turso_url,
+                turso_token=turso_token,
+            )
+        else:
+            resolved_abs = str(Path(resolved).resolve())
+            logger.info(f"Initialising QueueManager with local SQLite: {resolved} (resolved: {resolved_abs})")
+            _queue_manager = QueueManager(db_path=resolved)
 
     return _queue_manager

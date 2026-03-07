@@ -17,6 +17,10 @@ services:
         sync: false
       - key: DATABASE_PATH
         sync: false
+      - key: TURSO_DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false
       - key: MEDIA_STORAGE_PATH
         sync: false
       - key: MAX_MEDIA_SIZE_MB
