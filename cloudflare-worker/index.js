@@ -475,19 +475,26 @@ async function handleCommand(env, chatId, text) {
 
 /**
  * Wait for the Render server to become ready (handles free-tier cold starts).
- * Polls /health with short intervals first (to catch fast startups) then
- * increasing backoff.  Total wait is ~90 seconds which fits comfortably
- * inside Cloudflare Worker wall-clock limits.
+ *
+ * Total wall-clock time is kept under ~22 seconds so that the entire
+ * forward-to-Render flow (waitForRender + fetch /webhook) fits inside
+ * Cloudflare Workers' 30-second ctx.waitUntil() limit on the free plan.
+ *
+ * If the server doesn't come up in time, the update is already safe in
+ * KV (write-ahead log) and will be replayed when:
+ *   - Render calls /retry on startup (_trigger_pending_replay)
+ *   - The next cron trigger fires
+ *   - The next incoming webhook triggers a replay
  */
 async function waitForRender(env) {
   const healthUrl = `${env.RENDER_URL.replace(/\/$/, "")}/health`;
-  // Intervals in ms between attempts.  Aggressive early, then back off.
-  const intervals = [2000, 3000, 5000, 8000, 10000, 12000, 15000, 15000, 15000];
+  // 5 attempts, ~22s total wall-clock (fits in 30s waitUntil budget)
+  const intervals = [2000, 3000, 5000, 5000, 5000];
 
   for (let i = 0; i < intervals.length; i++) {
     try {
       const resp = await fetch(healthUrl, {
-        signal: AbortSignal.timeout(8000),
+        signal: AbortSignal.timeout(4000),
       });
       if (resp.ok) return; // Server is ready
     } catch {

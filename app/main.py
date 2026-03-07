@@ -221,6 +221,35 @@ async def _process_webhook(update: Dict) -> None:
 _QUEUE_POLL_INTERVAL = int(os.getenv("QUEUE_POLL_INTERVAL", "60"))  # seconds
 
 
+async def _trigger_pending_replay():
+	"""Call CF Worker /retry to replay any updates stuck in KV during cold start.
+
+	The CF Worker stores updates in KV before attempting to forward them.
+	If the Worker's ctx.waitUntil() times out during a Render cold start,
+	those updates sit in KV.  This function ensures they get replayed as
+	soon as the server is actually ready to receive them.
+	"""
+	await asyncio.sleep(5)  # Give FastAPI a moment to be fully ready
+	cf_url = os.getenv("CLOUDFLARE_WORKER_URL", "").rstrip("/")
+	if not cf_url:
+		return
+	try:
+		retry_url = f"{cf_url}/retry"
+		async with httpx.AsyncClient() as client:
+			resp = await client.get(retry_url, timeout=15)
+			if resp.status_code == 200:
+				data = resp.json()
+				replayed = data.get("replayed", 0)
+				if replayed > 0:
+					logger.info(f"Startup replay: {replayed} pending update(s) recovered from CF Worker KV")
+				else:
+					logger.debug("Startup replay: no pending updates in CF Worker KV")
+			else:
+				logger.warning(f"Startup /retry returned HTTP {resp.status_code}")
+	except Exception as e:
+		logger.debug(f"Startup /retry call failed (non-critical): {e}")
+
+
 async def _queue_processing_loop():
 	"""Periodically process due jobs in the background.
 
@@ -274,10 +303,14 @@ async def _lifespan(application: FastAPI):
 	task = asyncio.create_task(_queue_processing_loop())
 	logger.info(f"Background queue processor started (interval={_QUEUE_POLL_INTERVAL}s)")
 
+	# Replay any updates stuck in CF Worker KV from a previous cold-start timeout
+	replay_task = asyncio.create_task(_trigger_pending_replay())
+
 	yield
 
-	# Shutdown: cancel the background task
+	# Shutdown: cancel the background tasks
 	task.cancel()
+	replay_task.cancel()
 	try:
 		await task
 	except asyncio.CancelledError:
