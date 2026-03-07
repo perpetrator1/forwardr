@@ -291,7 +291,7 @@ async function handleCommand(env, chatId, text) {
         }
 
         if (health.next_scheduled) {
-          msg += `\n*Next scheduled:* ${health.next_scheduled} UTC`;
+          msg += `\n*Next scheduled:* ${health.next_scheduled} IST`;
         }
 
         return msg;
@@ -430,7 +430,7 @@ async function handleCommand(env, chatId, text) {
         let msg = `📋 *Pending Jobs (${pending.length}):*\n\n`;
         for (const job of pending.slice(0, 15)) {
           const sched = job.scheduled_time ? job.scheduled_time.replace("T", " ").slice(0, 16) : "?";
-          msg += `• #${job.id} — *${job.platform}* — ${sched} UTC\n`;
+          msg += `• #${job.id} — *${job.platform}* — ${sched} IST\n`;
         }
 
         if (pending.length > 15) {

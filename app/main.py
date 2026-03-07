@@ -16,6 +16,7 @@ import os
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
@@ -26,6 +27,13 @@ from app.queue_manager import get_queue_manager
 from app.services.platforms import determine_platforms, get_loaded_handlers
 
 logger = logging.getLogger(__name__)
+
+IST = ZoneInfo("Asia/Kolkata")
+
+
+def _now_ist() -> datetime:
+	"""Return the current time in IST, timezone-naive for comparison."""
+	return datetime.now(IST).replace(tzinfo=None)
 
 _queue_manager = None
 
@@ -171,7 +179,7 @@ async def _process_webhook(update: Dict) -> None:
 			chat_id=chat_id,
 		)
 
-		now = datetime.utcnow()
+		now = _now_ist()
 		is_immediate = (scheduled_time - now).total_seconds() < 60
 
 		if is_immediate:
@@ -187,7 +195,7 @@ async def _process_webhook(update: Dict) -> None:
 				await _send_telegram_msg(bot_token, chat_id, summary)
 		else:
 			# Scheduled for later — notify user
-			time_str = scheduled_time.strftime("%b %d, %H:%M UTC")
+			time_str = scheduled_time.strftime("%b %d, %H:%M IST")
 			platform_list = ", ".join(platforms)
 			await _send_telegram_msg(bot_token, chat_id,
 				f"\U0001f4cb <b>Queued for posting</b>\n"

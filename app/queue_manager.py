@@ -12,17 +12,26 @@ import os
 import sqlite3
 import logging
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 from dataclasses import asdict
 from contextlib import contextmanager
+from zoneinfo import ZoneInfo
 
 import httpx
 
 from app.media_handler import MediaInfo, MediaHandler
 
 logger = logging.getLogger(__name__)
+
+# IST timezone (UTC+5:30)
+IST = ZoneInfo("Asia/Kolkata")
+
+
+def _now_ist() -> datetime:
+    """Return the current time in IST (Asia/Kolkata), timezone-naive for DB storage."""
+    return datetime.now(IST).replace(tzinfo=None)
 
 # ---------------------------------------------------------------------------
 # Turso HTTP API helpers
@@ -360,14 +369,15 @@ class QueueManager:
             Tuple of (list of job IDs, scheduled datetime)
         """
         job_ids = []
-        now = datetime.utcnow()
+        now = _now_ist()
         
         with self._get_connection() as conn:
-            # Find the latest scheduled_time across pending/completed jobs
+            # Find the latest scheduled_time across pending jobs
+            # (completed/cancelled jobs are deleted after processing)
             cursor = conn.execute("""
                 SELECT MAX(scheduled_time) as latest
                 FROM jobs 
-                WHERE status IN ('pending', 'completed')
+                WHERE status = 'pending'
             """)
             row = cursor.fetchone()
             latest = row['latest'] if row and row['latest'] else None
@@ -415,7 +425,7 @@ class QueueManager:
         Returns:
             List of job dictionaries
         """
-        now = datetime.utcnow().isoformat()
+        now = _now_ist().isoformat()
         
         with self._get_connection() as conn:
             cursor = conn.execute("""
@@ -437,7 +447,7 @@ class QueueManager:
         Returns:
             Job dictionary or None
         """
-        now = datetime.utcnow().isoformat()
+        now = _now_ist().isoformat()
         
         with self._get_connection() as conn:
             cursor = conn.execute("""
@@ -538,7 +548,7 @@ class QueueManager:
             error_message: Error message if failed
             post_url: URL of posted content if successful
         """
-        now = datetime.utcnow().isoformat()
+        now = _now_ist().isoformat()
         
         with self._get_connection() as conn:
             # Get current job info
@@ -557,7 +567,7 @@ class QueueManager:
             
             # Append error message if provided
             if error_message:
-                timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+                timestamp = _now_ist().strftime("%Y-%m-%d %H:%M:%S")
                 error_log += f"\n[{timestamp}] Attempt {attempts}: {error_message}"
             
             # Update job
@@ -585,14 +595,14 @@ class QueueManager:
             job_id: Job ID to reschedule
             delay_minutes: Minutes to wait before retry
         """
-        new_time = datetime.utcnow() + timedelta(minutes=delay_minutes)
+        new_time = _now_ist() + timedelta(minutes=delay_minutes)
         
         with self._get_connection() as conn:
             conn.execute("""
                 UPDATE jobs 
                 SET scheduled_time = ?, status = 'pending', updated_at = ?
                 WHERE id = ?
-            """, (new_time.isoformat(), datetime.utcnow().isoformat(), job_id))
+            """, (new_time.isoformat(), _now_ist().isoformat(), job_id))
             
         logger.info(f"Job #{job_id} rescheduled for {new_time.isoformat()}")
 
@@ -797,6 +807,20 @@ class QueueManager:
                         
             except Exception as e:
                 logger.error(f"Failed to cleanup file_id {file_id}: {e}")
+
+        # Delete finished jobs from the database after media cleanup
+        self._delete_finished_jobs()
+
+    def _delete_finished_jobs(self):
+        """Delete all completed and cancelled jobs from the database."""
+        with self._get_connection() as conn:
+            cursor = conn.execute("""
+                DELETE FROM jobs
+                WHERE status IN ('completed', 'cancelled')
+            """)
+            deleted = cursor.rowcount
+        if deleted:
+            logger.info(f"Deleted {deleted} finished (completed/cancelled) jobs from queue")
     
     def get_queue_status(self) -> Dict[str, int]:
         """
@@ -840,7 +864,7 @@ class QueueManager:
         Returns:
             True if cancelled, False otherwise
         """
-        now = datetime.utcnow().isoformat()
+        now = _now_ist().isoformat()
 
         with self._get_connection() as conn:
             cursor = conn.execute(
@@ -862,6 +886,7 @@ class QueueManager:
             )
 
         logger.info(f"Job #{job_id} cancelled")
+        self._delete_finished_jobs()
         return True
     
     def purge_old_jobs(self, days: int = 7) -> int:
@@ -874,7 +899,7 @@ class QueueManager:
         Returns:
             Number of jobs deleted
         """
-        cutoff_date = datetime.utcnow() - timedelta(days=days)
+        cutoff_date = _now_ist() - timedelta(days=days)
         
         with self._get_connection() as conn:
             cursor = conn.execute("""
