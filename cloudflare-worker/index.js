@@ -113,24 +113,32 @@ async function getCredential(kvNamespace, platform, key) {
 
 /**
  * Get all credentials — returns { platform: { key: value, ... }, ... }
+ *
+ * Uses individual get() calls based on PLATFORM_KEYS instead of list(),
+ * because KV list() has a 1,000/day limit on the free plan while
+ * get() allows 100,000/day.
  */
 async function getAllCredentials(kvNamespace) {
   const result = {};
-  const list = await kvNamespace.list({ prefix: "cred:" });
 
-  for (const item of list.keys) {
-    const raw = await kvNamespace.get(item.name);
-    if (raw === null) continue;
+  // Fire all get() calls in parallel for speed
+  const entries = [];
+  for (const [platform, keys] of Object.entries(PLATFORM_KEYS)) {
+    for (const key of keys) {
+      entries.push({ platform, key, kvKey: `cred:${platform}:${key}` });
+    }
+  }
 
-    // Parse key format: cred:<platform>:<key>
-    const parts = item.name.split(":");
-    if (parts.length < 3) continue;
+  const values = await Promise.all(
+    entries.map((e) => kvNamespace.get(e.kvKey))
+  );
 
-    const platform = parts[1];
-    const key = parts.slice(2).join(":"); // handle keys with colons
-
+  for (let i = 0; i < entries.length; i++) {
+    const val = values[i];
+    if (val === null) continue;
+    const { platform, key } = entries[i];
     if (!result[platform]) result[platform] = {};
-    result[platform][key] = raw;
+    result[platform][key] = val;
   }
 
   return result;
@@ -139,18 +147,26 @@ async function getAllCredentials(kvNamespace) {
 /**
  * List which platforms have at least one credential set.
  * Returns an object: { platform: [key1, key2, ...], ... }
+ *
+ * Uses individual get() calls instead of list() to stay within free-tier limits.
  */
 async function listConfiguredPlatforms(kvNamespace) {
   const result = {};
-  const list = await kvNamespace.list({ prefix: "cred:" });
 
-  for (const item of list.keys) {
-    const parts = item.name.split(":");
-    if (parts.length < 3) continue;
+  const entries = [];
+  for (const [platform, keys] of Object.entries(PLATFORM_KEYS)) {
+    for (const key of keys) {
+      entries.push({ platform, key, kvKey: `cred:${platform}:${key}` });
+    }
+  }
 
-    const platform = parts[1];
-    const key = parts.slice(2).join(":");
+  const values = await Promise.all(
+    entries.map((e) => kvNamespace.get(e.kvKey))
+  );
 
+  for (let i = 0; i < entries.length; i++) {
+    if (values[i] === null) continue;
+    const { platform, key } = entries[i];
     if (!result[platform]) result[platform] = [];
     result[platform].push(key);
   }
@@ -653,6 +669,34 @@ export default {
       });
     }
 
+    // POST /update-schedule — Render pushes next_scheduled here after queuing
+    if (request.method === "POST" && url.pathname === "/update-schedule") {
+      const apiKey = request.headers.get("X-API-Key");
+      if (!env.API_KEY || apiKey !== env.API_KEY) {
+        return new Response("Unauthorized", { status: 401 });
+      }
+
+      try {
+        const body = await request.json();
+        if (env.CREDENTIALS) {
+          if (body.next_scheduled) {
+            await env.CREDENTIALS.put("queue:next_scheduled", body.next_scheduled);
+          } else {
+            await env.CREDENTIALS.delete("queue:next_scheduled");
+          }
+        }
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: e.message }), {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    }
+
     // GET /credentials — return all stored credentials (API-key protected)
     if (request.method === "GET" && url.pathname === "/credentials") {
       const apiKey = request.headers.get("X-API-Key");
@@ -667,18 +711,29 @@ export default {
         });
       }
 
-      const creds = await getAllCredentials(env.CREDENTIALS);
+      try {
+        const creds = await getAllCredentials(env.CREDENTIALS);
 
-      // Include config values alongside credentials
-      const interval = await env.CREDENTIALS.get("config:post_interval_hours");
-      creds._config = {
-        post_interval_hours: interval !== null ? parseFloat(interval) : 5,
-      };
+        // Include config values alongside credentials
+        const interval = await env.CREDENTIALS.get("config:post_interval_hours");
+        creds._config = {
+          post_interval_hours: interval !== null ? parseFloat(interval) : 5,
+        };
 
-      return new Response(JSON.stringify(creds), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
+        return new Response(JSON.stringify(creds), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      } catch (err) {
+        console.error("KV credential fetch error:", err.message, err.stack);
+        return new Response(
+          JSON.stringify({ error: "KV read failed", detail: err.message }),
+          {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          }
+        );
+      }
     }
 
     // Only process POST from here on (Telegram webhook)
@@ -757,6 +812,9 @@ export default {
           } catch (e) {
             console.error("Replay error:", e.message);
           }
+
+          // next_scheduled is now pushed by Render via POST /update-schedule
+          // after the background task finishes — no need to poll here.
         } catch (err) {
           // Forward failed (Worker timeout / Render unreachable) —
           // the update is already safe in KV and will be retried by
@@ -770,21 +828,52 @@ export default {
   },
 
   /**
-   * Cron trigger — processes the queue every 5 hours
+   * Cron trigger — runs every minute, but only wakes Render when needed.
+   *
+   * Checks KV for the next scheduled time (written after webhook forward).
+   * Only wakes Render if that time has arrived.  Never pings Render
+   * otherwise, preserving free tier hours.
    */
   async scheduled(event, env, ctx) {
     ctx.waitUntil(
       (async () => {
         try {
-          // Replay any pending/failed updates first
+          // Replay any pending/failed updates first (lightweight KV operation)
           const replay = await replayPending(env);
           if (replay.replayed > 0) {
             console.log(`Replayed ${replay.replayed} pending updates`);
           }
 
-          // Process all due jobs
+          // Check KV for next scheduled time — NO Render ping
+          if (!env.CREDENTIALS) return;
+          const nextScheduled = await env.CREDENTIALS.get("queue:next_scheduled");
+          if (!nextScheduled) {
+            // No pending jobs — nothing to do
+            return;
+          }
+
+          // Compare with current time
+          // Backend sends IST datetime string like '2026-03-07T22:30:00' without timezone.
+          // Append +05:30 so Date() parses it correctly as IST instead of UTC.
+          const scheduledMs = new Date(nextScheduled + "+05:30").getTime();
+          const nowMs = Date.now();
+          if (scheduledMs > nowMs) {
+            // Not due yet — don't wake Render
+            return;
+          }
+
+          // Time is due — wake Render and process the queue
+          console.log(`Cron: scheduled time ${nextScheduled} is due, waking Render`);
           const result = await triggerQueueProcessing(env);
           console.log("Queue processing result:", JSON.stringify(result));
+
+          // Update KV with the new next_scheduled from the response
+          if (result.next_scheduled) {
+            await env.CREDENTIALS.put("queue:next_scheduled", result.next_scheduled);
+          } else {
+            // No more pending jobs — clear the flag
+            await env.CREDENTIALS.delete("queue:next_scheduled");
+          }
         } catch (err) {
           console.error("Scheduled processing failed:", err.message);
         }
