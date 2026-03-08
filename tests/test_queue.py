@@ -215,6 +215,7 @@ def test_queue_system():
     
     # Mock the platform module loading so we don't actually post
     from unittest.mock import patch, MagicMock
+    import app.services.platforms
     
     with patch("app.services.platforms.post_to_platform", return_value="https://example.com/mock_post"):
         # Create test jobs (scheduled 5 seconds apart)

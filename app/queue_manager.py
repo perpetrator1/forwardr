@@ -826,69 +826,74 @@ class QueueManager:
     
     def _cleanup_completed_media(self):
         """
-        Clean up media files for jobs where all platforms are complete
+        Clean up media files for jobs where all platforms are complete or cancelled.
         """
         with self._get_connection() as conn:
-            # Find file_ids where all jobs are completed or failed
             cursor = conn.execute("""
-                SELECT DISTINCT file_id
+                SELECT id, media_info
                 FROM jobs
-                WHERE file_id IS NOT NULL
-                AND file_id NOT IN (
-                    SELECT DISTINCT file_id
-                    FROM jobs
-                    WHERE status = 'pending'
-                    AND file_id IS NOT NULL
-                )
+                WHERE status IN ('completed', 'cancelled')
             """)
+            finished_rows = list(cursor.fetchall())
             
-            completed_file_ids = [row['file_id'] for row in cursor.fetchall()]
-            
-        for file_id in completed_file_ids:
+            if not finished_rows:
+                return
+                
+            # Check what's still in use by pending jobs
+            cursor = conn.execute("""
+                SELECT media_info
+                FROM jobs
+                WHERE status = 'pending'
+            """)
+            in_use_rows = list(cursor.fetchall())
+
+        in_use_cloudinary_ids = set()
+        in_use_local_paths = set()
+        
+        for row in in_use_rows:
             try:
-                with self._get_connection() as conn:
-                    cursor = conn.execute("""
-                        SELECT media_info FROM jobs 
-                        WHERE file_id = ? 
-                        LIMIT 1
-                    """, (file_id,))
-                    
-                    row = cursor.fetchone()
-                    if not row:
-                        continue
-                    
-                    media_info_dict = json.loads(row['media_info'])
-                    media_info = MediaInfo(**media_info_dict)
-                    
-                    # Clean up local file
-                    if media_info.local_path and Path(media_info.local_path).exists():
+                info_dict = json.loads(row['media_info'])
+                if info_dict.get('cloudinary_public_id'):
+                    in_use_cloudinary_ids.add(info_dict['cloudinary_public_id'])
+                if info_dict.get('local_path'):
+                    in_use_local_paths.add(info_dict['local_path'])
+            except Exception:
+                pass
+
+        for row in finished_rows:
+            try:
+                job_id = row['id']
+                info_dict = json.loads(row['media_info'])
+                media_info = MediaInfo(**info_dict)
+                
+                # Clean up local file
+                local_path = info_dict.get('local_path')
+                if local_path and local_path not in in_use_local_paths:
+                    if Path(local_path).exists():
                         handler = MediaHandler(bot_token="", media_dir="./media")
                         handler.cleanup_media(media_info)
-                        logger.info(f"Cleaned up local media for file_id: {file_id}")
-
-                        # Clean up Cloudinary
-                    if media_info.cloudinary_public_id:
-                        try:
-                            from app.utils.cloudinary_config import delete_media, CLOUDINARY_AVAILABLE
-                            if CLOUDINARY_AVAILABLE:
-                                # Determine resource type from media type
-                                resource_type = 'video' if media_info.type == 'video' else 'image'
-                                if delete_media(media_info.cloudinary_public_id, resource_type):
-                                    logger.info(f"Deleted from Cloudinary: {media_info.cloudinary_public_id}")
-                                else:
-                                    logger.warning(f"Failed to delete from Cloudinary: {media_info.cloudinary_public_id}")
-                        except Exception as ce:
-                            logger.warning(f"Cloudinary cleanup failed for {file_id}: {ce}")
-
-                    # Prevent infinite cleanup loops by clearing the file_id on all related jobs
-                    conn.execute("""
-                        UPDATE jobs 
-                        SET file_id = NULL 
-                        WHERE file_id = ?
-                    """, (file_id,))
+                        logger.info(f"Cleaned up local media for job {job_id}")
+                    # Remove from our tracked set so we don't try to delete it again
+                    in_use_local_paths.add(local_path)
+                        
+                # Clean up Cloudinary
+                cloud_id = info_dict.get('cloudinary_public_id')
+                if cloud_id and cloud_id not in in_use_cloudinary_ids:
+                    try:
+                        from app.utils.cloudinary_config import delete_media, CLOUDINARY_AVAILABLE
+                        if CLOUDINARY_AVAILABLE:
+                            resource_type = 'video' if media_info.type == 'video' else 'image'
+                            if delete_media(cloud_id, resource_type):
+                                logger.info(f"Deleted from Cloudinary: {cloud_id}")
+                            else:
+                                logger.warning(f"Failed to delete from Cloudinary: {cloud_id}")
+                        # Remove from our tracked set so we don't try to delete it again
+                        in_use_cloudinary_ids.add(cloud_id)
+                    except Exception as ce:
+                        logger.warning(f"Cloudinary cleanup failed for {cloud_id}: {ce}")
                         
             except Exception as e:
-                logger.error(f"Failed to cleanup file_id {file_id}: {e}")
+                logger.error(f"Failed to cleanup media for job {row['id']}: {e}")
 
         # Delete finished jobs from the database after media cleanup
         self._delete_finished_jobs()
