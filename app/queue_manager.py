@@ -343,6 +343,14 @@ class QueueManager:
                 )
             """)
 
+            # Table for deduplicating incoming Telegram updates
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS processed_updates (
+                    update_id INTEGER PRIMARY KEY,
+                    processed_at TEXT NOT NULL
+                )
+            """)
+
             # Migration: add chat_id column for Telegram notifications
             try:
                 conn.execute("ALTER TABLE jobs ADD COLUMN chat_id TEXT")
@@ -352,6 +360,37 @@ class QueueManager:
             
             logger.info("Database initialized")
     
+    def is_update_processed(self, update_id: int) -> bool:
+        """
+        Check if a Telegram update has already been processed.
+        
+        Args:
+            update_id: The Telegram update_id
+            
+        Returns:
+            True if processed, False otherwise
+        """
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT 1 FROM processed_updates WHERE update_id = ?",
+                (update_id,)
+            )
+            return cursor.fetchone() is not None
+
+    def mark_update_processed(self, update_id: int) -> None:
+        """
+        Mark a Telegram update as processed.
+        
+        Args:
+            update_id: The Telegram update_id
+        """
+        now = _now_ist().isoformat()
+        with self._get_connection() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO processed_updates (update_id, processed_at) VALUES (?, ?)",
+                (update_id, now)
+            )
+
     def queue_posts(
         self, 
         media_info: MediaInfo, 
@@ -402,7 +441,7 @@ class QueueManager:
                     # Only use it if it's recent enough to matter for spacing.
                     # If the interval has already fully elapsed, discard it —
                     # no point keeping stale data.
-                    if now - meta_dt < timedelta(hours=interval_hours):
+                    if now < meta_dt + timedelta(hours=interval_hours):
                         latest = meta['value']
                     else:
                         # Stale — clean it up
@@ -827,7 +866,7 @@ class QueueManager:
                         handler.cleanup_media(media_info)
                         logger.info(f"Cleaned up local media for file_id: {file_id}")
 
-                    # Clean up Cloudinary
+                        # Clean up Cloudinary
                     if media_info.cloudinary_public_id:
                         try:
                             from app.utils.cloudinary_config import delete_media, CLOUDINARY_AVAILABLE
@@ -840,6 +879,13 @@ class QueueManager:
                                     logger.warning(f"Failed to delete from Cloudinary: {media_info.cloudinary_public_id}")
                         except Exception as ce:
                             logger.warning(f"Cloudinary cleanup failed for {file_id}: {ce}")
+
+                    # Prevent infinite cleanup loops by clearing the file_id on all related jobs
+                    conn.execute("""
+                        UPDATE jobs 
+                        SET file_id = NULL 
+                        WHERE file_id = ?
+                    """, (file_id,))
                         
             except Exception as e:
                 logger.error(f"Failed to cleanup file_id {file_id}: {e}")

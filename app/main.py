@@ -141,6 +141,14 @@ async def _process_webhook(update: Dict) -> None:
 			logger.error("Webhook payload missing Telegram message")
 			return
 
+		update_id = update.get("update_id")
+		if update_id:
+			qm = _get_qm()
+			if qm.is_update_processed(update_id):
+				logger.info(f"Update {update_id} already processed. Skipping duplicate.")
+				return
+			qm.mark_update_processed(update_id)
+
 		# Extract chat_id for sending notifications back
 		chat_id = str(message.get("chat", {}).get("id", ""))
 
