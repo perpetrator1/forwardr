@@ -490,25 +490,43 @@ def queue_list() -> Dict:
 
 @app.patch("/queue/{job_id}")
 async def queue_update(job_id: int, data: Dict) -> Dict:
-	"""Update job media info (e.g. caption)."""
-	qm = _get_qm()
-	job = qm.get_job(job_id)
-	if not job:
-		raise HTTPException(status_code=404, detail="Job not found")
-	
-	try:
-		media_info = json.loads(job['media_info'])
-		# Update fields provided in data
-		for key, value in data.items():
-			media_info[key] = value
-		
-		success = qm.update_job_media_info(job_id, media_info)
-		if not success:
-			raise HTTPException(status_code=400, detail="Job not pending or update failed")
-		
-		return {"status": "updated", "job_id": job_id}
-	except Exception as e:
-		raise HTTPException(status_code=400, detail=str(e))
+    """Update job media info (e.g. caption)."""
+    qm = _get_qm()
+    job = qm.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    try:
+        media_info = json.loads(job['media_info'])
+        # Update fields provided in data
+        for key, value in data.items():
+            media_info[key] = value
+        
+        success = qm.update_job_media_info(job_id, media_info)
+        if not success:
+            raise HTTPException(status_code=400, detail="Job not pending or update failed")
+        
+        return {"status": "updated", "job_id": job_id}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/queue/{job_id}")
+async def queue_delete(job_id: int):
+    """Cancel a pending job."""
+    qm = _get_qm()
+    success = qm.cancel_job(job_id)
+    if not success:
+        raise HTTPException(status_code=400, detail="Job not found or not pending")
+    return {"status": "cancelled", "job_id": job_id}
+
+
+@app.delete("/queue")
+async def queue_delete_all():
+    """Cancel all pending jobs."""
+    qm = _get_qm()
+    count = qm.cancel_all_jobs()
+    return {"status": "cancelled", "count": count}
 
 
 @app.post("/settings/platform/{platform}/{key}")

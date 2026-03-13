@@ -417,7 +417,31 @@ class QueueManager:
         """
         job_ids = []
         now = _now_ist()
-        
+
+        # Smart merging: if this is a media post without a caption,
+        # look for a very recent text-only post from the same chat.
+        if media_info.type != 'text' and not media_info.caption and chat_id:
+            with self._get_connection() as conn:
+                # Look for a text-only job queued in the last 15 seconds
+                fifteen_secs_ago = (now - timedelta(seconds=15)).isoformat()
+                cursor = conn.execute("""
+                    SELECT id, media_info FROM jobs 
+                    WHERE chat_id = ? AND status = 'pending' AND created_at >= ?
+                    ORDER BY created_at DESC LIMIT 1
+                """, (chat_id, fifteen_secs_ago))
+                row = cursor.fetchone()
+                if row:
+                    try:
+                        last_job_id = row['id']
+                        last_info = json.loads(row['media_info'])
+                        if last_info.get('type') == 'text' and last_info.get('caption'):
+                            logger.info(f"Merging text from job #{last_job_id} into new media job as caption")
+                            media_info.caption = last_info['caption']
+                            # Cancel the old text-only job
+                            conn.execute("UPDATE jobs SET status = 'cancelled' WHERE id = ?", (last_job_id,))
+                    except Exception as e:
+                        logger.warning(f"Failed to merge text-only job: {e}")
+
         with self._get_connection() as conn:
             # Check pending jobs first, then fall back to the persisted
             # last_scheduled_time (which survives completed-job deletion).
@@ -977,6 +1001,33 @@ class QueueManager:
 
         # Recalculate metadata so a cancelled future-schedule doesn't
         # block the next submission from going out immediately.
+        self._recalculate_last_scheduled()
+        return True
+
+    def cancel_all_jobs(self) -> int:
+        """
+        Cancel ALL pending jobs.
+
+        Returns:
+            Number of jobs cancelled
+        """
+        now = _now_ist().isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "UPDATE jobs SET status = 'cancelled', updated_at = ? WHERE status = 'pending'",
+                (now,)
+            )
+            cancelled_count = cursor.rowcount
+
+        if cancelled_count > 0:
+            logger.info(f"Cancelled {cancelled_count} pending jobs")
+            self._delete_finished_jobs()
+            self._recalculate_last_scheduled()
+
+        return cancelled_count
+
+    def _recalculate_last_scheduled(self):
+        """Update 'last_scheduled_time' in metadata based on remaining pending jobs."""
         with self._get_connection() as conn:
             cursor = conn.execute("""
                 SELECT MAX(scheduled_time) as latest
@@ -990,8 +1041,6 @@ class QueueManager:
                 """, (row['latest'],))
             else:
                 conn.execute("DELETE FROM metadata WHERE key = 'last_scheduled_time'")
-
-        return True
     
     def purge_old_jobs(self, days: int = 7) -> int:
         """

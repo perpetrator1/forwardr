@@ -179,9 +179,8 @@ async function listConfiguredPlatforms(kvNamespace) {
 // ---------------------------------------------------------------------------
 
 async function handleCommand(env, chatId, text) {
-  // Only use the first line — ignore any additional lines in the message
-  const firstLine = text.trim().split("\n")[0].trim();
-  const parts = firstLine.split(/\s+/);
+  const trimmedText = text.trim();
+  const parts = trimmedText.split(/\s+/);
   const command = parts[0].toLowerCase().replace(/@\w+$/, ""); // strip @botname
 
   switch (command) {
@@ -392,30 +391,18 @@ async function handleCommand(env, chatId, text) {
         await waitForRender(env);
 
         if (target === "all") {
-          // Fetch queue, cancel every pending job
-          const qResp = await fetch(`${baseUrl}/queue`, {
-            signal: AbortSignal.timeout(15000),
+          const resp = await fetch(`${baseUrl}/queue`, {
+            method: "DELETE",
+            headers: { "X-API-Key": env.API_KEY },
           });
-          if (!qResp.ok) {
-            return "⚠️ Could not reach the server. It may be spinning up — try again in a minute.";
-          }
-          const qData = await qResp.json();
-          const pending = (qData.jobs || []).filter((j) => j.status === "pending");
 
-          if (pending.length === 0) {
-            return "📋 No pending jobs to cancel.";
+          if (resp.ok) {
+            const data = await resp.json();
+            return `🗑️ Cancelled ${data.count} pending jobs.`;
           }
 
-          let cancelled = 0;
-          for (const job of pending) {
-            const resp = await fetch(`${baseUrl}/queue/${job.id}`, {
-              method: "DELETE",
-              headers: { "X-API-Key": env.API_KEY },
-            });
-            if (resp.ok) cancelled++;
-          }
-
-          return `🗑️ Cancelled ${cancelled}/${pending.length} pending jobs.`;
+          const errData = await resp.json().catch(() => ({}));
+          return `❌ Could not cancel jobs: ${errData.detail || resp.status}`;
         }
 
         // Single job cancel
