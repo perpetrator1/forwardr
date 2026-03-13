@@ -925,6 +925,15 @@ class QueueManager:
     def _delete_finished_jobs(self):
         """Delete all completed and cancelled jobs from the database."""
         with self._get_connection() as conn:
+            # Capture latest completed time to persist as a watermark
+            cursor = conn.execute("SELECT MAX(scheduled_time) as latest FROM jobs WHERE status = 'completed'")
+            row = cursor.fetchone()
+            if row and row['latest']:
+                conn.execute("""
+                    INSERT INTO metadata (key, value) VALUES ('last_completion_time', ?)
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """, (row['latest'],))
+
             cursor = conn.execute("""
                 DELETE FROM jobs
                 WHERE status IN ('completed', 'cancelled')
@@ -1027,19 +1036,35 @@ class QueueManager:
         return cancelled_count
 
     def _recalculate_last_scheduled(self):
-        """Update 'last_scheduled_time' in metadata based on remaining pending jobs."""
+        """Update 'last_scheduled_time' in metadata based on remaining pending jobs and last completion."""
         with self._get_connection() as conn:
+            # Get max from pending jobs
             cursor = conn.execute("""
                 SELECT MAX(scheduled_time) as latest
                 FROM jobs WHERE status = 'pending'
             """)
             row = cursor.fetchone()
-            if row and row['latest']:
+            pending_latest = row['latest'] if row and row['latest'] else None
+
+            # Get last known completion time
+            cursor = conn.execute("SELECT value FROM metadata WHERE key = 'last_completion_time'")
+            row = cursor.fetchone()
+            completion_latest = row['value'] if row else None
+
+            # New watermark is the max of the two
+            watermark = None
+            if pending_latest and completion_latest:
+                watermark = max(pending_latest, completion_latest)
+            else:
+                watermark = pending_latest or completion_latest
+
+            if watermark:
                 conn.execute("""
                     INSERT INTO metadata (key, value) VALUES ('last_scheduled_time', ?)
                     ON CONFLICT(key) DO UPDATE SET value = excluded.value
-                """, (row['latest'],))
+                """, (watermark,))
             else:
+                # Truly empty slate
                 conn.execute("DELETE FROM metadata WHERE key = 'last_scheduled_time'")
     
     def purge_old_jobs(self, days: int = 7) -> int:
