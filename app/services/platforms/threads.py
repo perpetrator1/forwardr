@@ -320,6 +320,13 @@ def post(media_info: Dict) -> Optional[str]:
 
         # --- Text ----------------------------------------------------------------
         text = media_info.get('caption', '') or ''
+        
+        # Append platform-specific adder (hashtags)
+        from app.queue_manager import get_queue_manager
+        qm = get_queue_manager()
+        adder = qm.get_platform_setting('threads', 'caption_adder')
+        if adder:
+            text = f"{text}\n\n{adder}" if text else adder
         media_type = media_info.get('type', 'text')
         local_path = media_info.get('local_path')
         # Only require text for text-only posts; media posts can have empty captions

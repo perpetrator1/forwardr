@@ -31,6 +31,13 @@ def post(media_info: Dict) -> Optional[str]:
         # Get the text content
         text = media_info.get('caption', '')
         
+        # Append platform-specific adder (hashtags)
+        from app.queue_manager import get_queue_manager
+        qm = get_queue_manager()
+        adder = qm.get_platform_setting('mastodon', 'caption_adder')
+        if adder:
+            text = f"{text}\n\n{adder}" if text else adder
+        
         # Post with media if available
         if media_info['type'] in ['photo', 'video'] and media_info.get('local_path'):
             logger.info(f"Mastodon: Uploading {media_info['type']} from {media_info['local_path']}")

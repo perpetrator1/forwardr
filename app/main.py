@@ -13,6 +13,7 @@ server.
 import asyncio
 import logging
 import os
+import json
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -487,11 +488,42 @@ def queue_list() -> Dict:
 	return {"jobs": jobs}
 
 
-@app.delete("/queue/{job_id}")
-async def queue_cancel(job_id: int) -> Dict:
+@app.patch("/queue/{job_id}")
+async def queue_update(job_id: int, data: Dict) -> Dict:
+	"""Update job media info (e.g. caption)."""
 	qm = _get_qm()
-	success = qm.cancel_job(job_id)
-	if not success:
-		raise HTTPException(status_code=400, detail="Job not pending or not found")
-	await _push_next_scheduled()
-	return {"status": "cancelled", "job_id": job_id}
+	job = qm.get_job(job_id)
+	if not job:
+		raise HTTPException(status_code=404, detail="Job not found")
+	
+	try:
+		media_info = json.loads(job['media_info'])
+		# Update fields provided in data
+		for key, value in data.items():
+			media_info[key] = value
+		
+		success = qm.update_job_media_info(job_id, media_info)
+		if not success:
+			raise HTTPException(status_code=400, detail="Job not pending or update failed")
+		
+		return {"status": "updated", "job_id": job_id}
+	except Exception as e:
+		raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/settings/platform/{platform}/{key}")
+async def set_platform_setting(platform: str, key: str, data: Dict):
+	"""Set a platform-specific setting."""
+	qm = _get_qm()
+	value = data.get("value")
+	if value is None:
+		raise HTTPException(status_code=400, detail="Missing value")
+	qm.set_platform_setting(platform, key, value)
+	return {"status": "ok"}
+
+
+@app.get("/settings/platform/{key}")
+async def get_all_platform_settings(key: str):
+	"""Get all platform settings for a specific key."""
+	qm = _get_qm()
+	return qm.get_all_platform_settings(key)

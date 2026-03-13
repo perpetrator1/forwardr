@@ -1063,6 +1063,67 @@ class QueueManager:
             
         return dict(row) if row else None
 
+    def update_job_media_info(self, job_id: int, media_info: Dict) -> bool:
+        """
+        Update the media_info of a job.
+        
+        Args:
+            job_id: Job ID
+            media_info: New media_info dictionary
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        now = _now_ist().isoformat()
+        with self._get_connection() as conn:
+            # Only allow updating pending jobs
+            cursor = conn.execute("SELECT status FROM jobs WHERE id = ?", (job_id,))
+            row = cursor.fetchone()
+            if not row or row['status'] != 'pending':
+                return False
+
+            conn.execute(
+                "UPDATE jobs SET media_info = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(media_info), now, job_id)
+            )
+        return True
+
+    def set_platform_setting(self, platform: str, key: str, value: str):
+        """Set a platform-specific setting in the metadata table."""
+        meta_key = f"setting:{platform}:{key}"
+        with self._get_connection() as conn:
+            conn.execute("""
+                INSERT INTO metadata (key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """, (meta_key, value))
+
+    def get_platform_setting(self, platform: str, key: str) -> Optional[str]:
+        """Get a platform-specific setting from the metadata table."""
+        meta_key = f"setting:{platform}:{key}"
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT value FROM metadata WHERE key = ?",
+                (meta_key,)
+            )
+            row = cursor.fetchone()
+            return row['value'] if row else None
+
+    def get_all_platform_settings(self, key: str) -> Dict[str, str]:
+        """Get all platform settings for a specific key (e.g., 'caption_adder')."""
+        prefix = f"setting:%:{key}"
+        results = {}
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT key, value FROM metadata WHERE key LIKE ?",
+                (prefix,)
+            )
+            for row in cursor.fetchall():
+                # Extract platform from "setting:platform:key"
+                parts = row['key'].split(':')
+                if len(parts) == 3:
+                    results[parts[1]] = row['value']
+        return results
+
 
 # Singleton instance
 _queue_manager = None

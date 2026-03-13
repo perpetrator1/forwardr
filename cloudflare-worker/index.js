@@ -277,7 +277,12 @@ async function handleCommand(env, chatId, text) {
     case "/status": {
       // Fetch queue status from the Render server
       try {
-        const healthUrl = `${env.RENDER_URL.replace(/\/$/, "")}/health`;
+        const baseUrl = env.RENDER_URL.replace(/\/$/, "");
+
+        // Wait for server to be ready (handles cold starts)
+        await waitForRender(env);
+
+        const healthUrl = `${baseUrl}/health`;
         const resp = await fetch(healthUrl, { signal: AbortSignal.timeout(10000) });
 
         if (!resp.ok) {
@@ -314,6 +319,9 @@ async function handleCommand(env, chatId, text) {
           const monthName = monthNames[parseInt(month, 10) - 1];
           msg += `\n*Next scheduled:* ${monthName} ${day}, ${timePart} IST`;
         }
+        
+        // Actionable info for job management
+        msg += "\n\nUse `/queue` to see job IDs for cancellation.";
 
         return msg;
       } catch (e) {
@@ -380,6 +388,9 @@ async function handleCommand(env, chatId, text) {
       try {
         const baseUrl = env.RENDER_URL.replace(/\/$/, "");
 
+        // Wait for server to be ready
+        await waitForRender(env);
+
         if (target === "all") {
           // Fetch queue, cancel every pending job
           const qResp = await fetch(`${baseUrl}/queue`, {
@@ -433,6 +444,10 @@ async function handleCommand(env, chatId, text) {
       // Show pending queue items
       try {
         const baseUrl = env.RENDER_URL.replace(/\/$/, "");
+
+        // Wait for server to be ready
+        await waitForRender(env);
+
         const resp = await fetch(`${baseUrl}/queue`, {
           signal: AbortSignal.timeout(15000),
         });
@@ -458,7 +473,107 @@ async function handleCommand(env, chatId, text) {
           msg += `\n_...and ${pending.length - 15} more_`;
         }
 
-        msg += "\n\nUse `/cancel <id>` or `/cancel all` to remove jobs.";
+        msg += "\n\nUse `/cancel <id>` or `/edit <id> <new caption>` to manage jobs.";
+        return msg;
+      } catch (e) {
+        return "⚠️ Could not reach the server. It may be spinning up — try again in a minute.";
+      }
+    }
+
+    case "/edit": {
+      // /edit <job_id> <new_caption>
+      if (parts.length < 3) {
+        return "❌ *Usage:* `/edit <job_id> <new caption>`";
+      }
+
+      const jobId = parseInt(parts[1], 10);
+      const newCaption = parts.slice(2).join(" ");
+
+      if (isNaN(jobId)) {
+        return "❌ Please provide a valid job ID.";
+      }
+
+      try {
+        const baseUrl = env.RENDER_URL.replace(/\/$/, "");
+        await waitForRender(env);
+
+        const resp = await fetch(`${baseUrl}/queue/${jobId}`, {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            "X-API-Key": env.API_KEY,
+          },
+          body: JSON.stringify({ caption: newCaption }),
+        });
+
+        if (resp.ok) {
+          return `✅ Job #${jobId} updated with new caption.`;
+        }
+
+        const errData = await resp.json().catch(() => ({}));
+        return `❌ Could not update job #${jobId}: ${errData.detail || resp.status}`;
+      } catch (e) {
+        return "⚠️ Could not reach the server. It may be spinning up — try again in a minute.";
+      }
+    }
+
+    case "/setadder": {
+      // /setadder <platform> <text>
+      if (parts.length < 3) {
+        return "❌ *Usage:* `/setadder <platform> <text>`\nExample: `/setadder instagram #nature #photography`";
+      }
+
+      const platform = parts[1].toLowerCase();
+      const text = parts.slice(2).join(" ");
+
+      try {
+        const baseUrl = env.RENDER_URL.replace(/\/$/, "");
+        await waitForRender(env);
+
+        const resp = await fetch(`${baseUrl}/settings/platform/${platform}/caption_adder`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-API-Key": env.API_KEY,
+          },
+          body: JSON.stringify({ value: text }),
+        });
+
+        if (resp.ok) {
+          return `✅ Caption adder for *${platform}* set to: \n_${text}_`;
+        }
+
+        const errData = await resp.json().catch(() => ({}));
+        return `❌ Could not set adder: ${errData.detail || resp.status}`;
+      } catch (e) {
+        return "⚠️ Could not reach the server. It may be spinning up — try again in a minute.";
+      }
+    }
+
+    case "/getadders": {
+      try {
+        const baseUrl = env.RENDER_URL.replace(/\/$/, "");
+        await waitForRender(env);
+
+        const resp = await fetch(`${baseUrl}/settings/platform/caption_adder`, {
+          headers: { "X-API-Key": env.API_KEY },
+        });
+
+        if (!resp.ok) {
+          return "⚠️ Could not reach the server or fetch settings.";
+        }
+
+        const data = await resp.json();
+        const platforms = Object.keys(data);
+
+        if (platforms.length === 0) {
+          return "📋 No platform-specific adders set.";
+        }
+
+        let msg = "📋 *Platform Adders:*\n\n";
+        for (const p of platforms) {
+          msg += `• *${p}*: ${data[p]}\n`;
+        }
         return msg;
       } catch (e) {
         return "⚠️ Could not reach the server. It may be spinning up — try again in a minute.";
@@ -473,10 +588,14 @@ async function handleCommand(env, chatId, text) {
         "`/setcred <platform> <key> <value>` — Save a credential\n" +
         "`/delcred <platform> <key>` — Delete a credential\n" +
         "`/getcreds` — List configured platforms\n\n" +
-        "⏰ *Scheduling:*\n" +
+        "⏰ *Scheduling & Job Management:*\n" +
         "`/setinterval <hours>` — Set hours between posts (default: 5)\n" +
         "`/queue` — View pending posts\n" +
+        "`/edit <id> <text>` — Edit a scheduled post's caption\n" +
         "`/cancel <id>` or `/cancel all` — Cancel queued posts\n\n" +
+        "🏷️ *Platform Customization:*\n" +
+        "`/setadder <platform> <text>` — Set text/hashtags to append for a platform\n" +
+        "`/getadders` — List all platform adders\n\n" +
         "📊 *Status:*\n" +
         "`/status` — Show queue & server status\n" +
         "`/help` — Show this help message\n\n" +
@@ -583,11 +702,37 @@ async function storePending(env, updateId, payload) {
   if (!env.FAILED_UPDATES) return;
   const key = `pending:${updateId}`;
   await env.FAILED_UPDATES.put(key, JSON.stringify(payload));
+
+  // Add to the list of pending IDs (avoids list())
+  try {
+    const raw = await env.FAILED_UPDATES.get("meta:pending_ids");
+    const ids = raw ? JSON.parse(raw) : [];
+    if (!ids.includes(updateId)) {
+      ids.push(updateId);
+      await env.FAILED_UPDATES.put("meta:pending_ids", JSON.stringify(ids));
+    }
+  } catch (e) {
+    console.error("Error updating meta:pending_ids", e);
+  }
 }
 
 async function removePending(env, updateId) {
   if (!env.FAILED_UPDATES) return;
   await env.FAILED_UPDATES.delete(`pending:${updateId}`);
+
+  // Remove from the list of pending IDs
+  try {
+    const raw = await env.FAILED_UPDATES.get("meta:pending_ids");
+    if (raw) {
+      const ids = JSON.parse(raw);
+      const filtered = ids.filter(id => id !== updateId);
+      if (filtered.length !== ids.length) {
+        await env.FAILED_UPDATES.put("meta:pending_ids", JSON.stringify(filtered));
+      }
+    }
+  } catch (e) {
+    console.error("Error updating meta:pending_ids", e);
+  }
 }
 
 /** @deprecated kept for backward compat — old "failed:" keys are replayed too */
@@ -606,12 +751,17 @@ async function replayPending(env) {
     return { replayed: 0, failed: 0, remaining: 0 };
   }
 
-  // Gather both old "failed:" keys and new "pending:" keys
-  const [failedList, pendingList] = await Promise.all([
-    env.FAILED_UPDATES.list({ prefix: "failed:" }),
-    env.FAILED_UPDATES.list({ prefix: "pending:" }),
-  ]);
-  const allKeys = [...failedList.keys, ...pendingList.keys];
+  // Use the tracking array to avoid list() calls
+  let allKeys = [];
+  try {
+    const raw = await env.FAILED_UPDATES.get("meta:pending_ids");
+    if (raw) {
+      const ids = JSON.parse(raw);
+      allKeys = ids.map(id => ({ name: `pending:${id}`, id }));
+    }
+  } catch (e) {
+    console.error("Error reading meta:pending_ids, falling back to empty replay", e);
+  }
 
   if (allKeys.length === 0) {
     return { replayed: 0, failed: 0, remaining: 0 };
@@ -622,30 +772,32 @@ async function replayPending(env) {
 
   for (const item of allKeys) {
     const raw = await env.FAILED_UPDATES.get(item.name);
-    if (!raw) continue;
+    if (!raw) {
+      // Clean up stale IDs
+      await removePending(env, item.id);
+      continue;
+    }
 
     let payload;
     try {
       payload = JSON.parse(raw);
     } catch {
       await env.FAILED_UPDATES.delete(item.name);
+      await removePending(env, item.id);
       continue;
     }
 
     try {
       await forwardToRender(env, payload);
-      await env.FAILED_UPDATES.delete(item.name);
+      await removePending(env, item.id);
       replayed += 1;
     } catch {
       failed += 1;
     }
   }
 
-  const [r1, r2] = await Promise.all([
-    env.FAILED_UPDATES.list({ prefix: "failed:" }),
-    env.FAILED_UPDATES.list({ prefix: "pending:" }),
-  ]);
-  const remaining = r1.keys.length + r2.keys.length;
+  const rawRemaining = await env.FAILED_UPDATES.get("meta:pending_ids");
+  const remaining = rawRemaining ? JSON.parse(rawRemaining).length : 0;
   return { replayed, failed, remaining };
 }
 

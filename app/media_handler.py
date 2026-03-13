@@ -244,6 +244,47 @@ class MediaHandler:
             logger.error(f"Failed to delete media: {e}")
             return False
     
+    def _pad_to_aspect_ratio(
+        self,
+        image: Image.Image,
+        target_ratio_str: str = "4:5",
+        background_color: Tuple[int, int, int] = (255, 255, 255)
+    ) -> Image.Image:
+        """
+        Pad image to a specific aspect ratio without cropping.
+        
+        Args:
+            image: PIL Image object
+            target_ratio_str: Target aspect ratio as "W:H"
+            background_color: RGB tuple for padding color
+            
+        Returns:
+            Padded Image
+        """
+        w, h = image.size
+        # Parse ratio
+        tw, th = map(int, target_ratio_str.split(":"))
+        target_ratio = tw / th
+        
+        current_ratio = w / h
+        
+        if current_ratio > target_ratio:
+            # Image is wider than target - pad top/bottom
+            new_h = int(w / target_ratio)
+            new_img = Image.new("RGB", (w, new_h), background_color)
+            top = (new_h - h) // 2
+            new_img.paste(image, (0, top))
+            return new_img
+        elif current_ratio < target_ratio:
+            # Image is taller than target - pad left/right
+            new_w = int(h * target_ratio)
+            new_img = Image.new("RGB", (new_w, h), background_color)
+            left = (new_w - w) // 2
+            new_img.paste(image, (left, 0))
+            return new_img
+        
+        return image
+
     def _resize_image(
         self, 
         image: Image.Image, 
@@ -387,9 +428,13 @@ class MediaHandler:
                         # Special handling for Instagram (square crop option)
                         if platform == "instagram":
                             # Create both regular and square variants
-                            # Regular variant
+                            # Regular variant (padded to valid Instagram ratio if needed)
+                            variant_img_regular = self._pad_to_aspect_ratio(
+                                img.copy(),
+                                "4:5"  # Typical portrait ratio
+                            )
                             variant_img_regular = self._resize_image(
-                                img.copy(), 
+                                variant_img_regular, 
                                 limits["max_dimension"],
                                 square_crop=False
                             )
@@ -427,6 +472,7 @@ class MediaHandler:
                                 "size_bytes": regular_path.stat().st_size,
                                 "size_mb": round(regular_path.stat().st_size / 1024 / 1024, 2),
                                 "dimensions": variant_img_regular.size,
+                                "ratio": "4:5",
                                 "quality": quality,
                             }
                             

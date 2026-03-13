@@ -314,6 +314,13 @@ def post(media_info: Dict) -> Optional[str]:
 
         # --- Prepare content -----------------------------------------------------
         caption = media_info.get("caption", "") or ""
+
+        # Append platform-specific adder (hashtags)
+        from app.queue_manager import get_queue_manager
+        qm = get_queue_manager()
+        adder = qm.get_platform_setting("instagram", "caption_adder")
+        if adder:
+            caption = f"{caption}\n\n{adder}" if caption else adder
         media_type = media_info.get("type", "text")
         local_path = media_info.get("local_path")
 
