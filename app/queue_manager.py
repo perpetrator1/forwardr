@@ -425,7 +425,7 @@ class QueueManager:
                 # Look for a text-only job queued in the last 15 seconds
                 fifteen_secs_ago = (now - timedelta(seconds=15)).isoformat()
                 cursor = conn.execute("""
-                    SELECT id, media_info, created_at FROM jobs 
+                    SELECT id, media_info FROM jobs 
                     WHERE chat_id = ? AND status = 'pending' AND created_at >= ?
                     ORDER BY created_at DESC LIMIT 1
                 """, (chat_id, fifteen_secs_ago))
@@ -433,16 +433,12 @@ class QueueManager:
                 if row:
                     try:
                         last_job_id = row['id']
-                        last_created_at = row['created_at']
                         last_info = json.loads(row['media_info'])
                         if last_info.get('type') == 'text' and last_info.get('caption'):
                             logger.info(f"Merging text from job #{last_job_id} into new media job as caption")
                             media_info.caption = last_info['caption']
-                            # Cancel ALL platform jobs for that specific text-only message
-                            conn.execute("""
-                                UPDATE jobs SET status = 'cancelled' 
-                                WHERE chat_id = ? AND created_at = ? AND status = 'pending'
-                            """, (chat_id, last_created_at))
+                            # Cancel the old text-only job
+                            conn.execute("UPDATE jobs SET status = 'cancelled' WHERE id = ?", (last_job_id,))
                     except Exception as e:
                         logger.warning(f"Failed to merge text-only job: {e}")
 
@@ -485,14 +481,6 @@ class QueueManager:
             else:
                 # No previous jobs or interval is 0 — post immediately
                 scheduled_time = now
-
-            # If this is a text-only post being scheduled for "now", add a short
-            # 5-second delay.  This gives Telegram a chance to send the media
-            # part of a forwarded message (which often arrives as text then media)
-            # so it can be merged into this job before it gets processed.
-            if media_info.type == 'text' and scheduled_time == now:
-                scheduled_time = now + timedelta(seconds=5)
-                logger.info(f"Adding 5s buffer to text-only job for {chat_id} to allow merging")
             
             for platform in platforms:
                 cursor = conn.execute("""
