@@ -110,14 +110,16 @@ class _TursoConnection:
     the ``_get_connection()`` context manager.
     """
 
-    def __init__(self, base_url: str, auth_token: str):
+    def __init__(self, base_url: str, auth_token: str, client: Optional[httpx.Client] = None):
         # Accept libsql:// or https:// URLs
         url = base_url.replace("libsql://", "https://")
         if not url.startswith("https://"):
             url = f"https://{url}"
         self._pipeline_url = f"{url}/v2/pipeline"
         self._auth_token = auth_token
-        self._client = httpx.Client(timeout=30.0)
+        # Use shared client if provided, else create a one-off client
+        self._client = client or httpx.Client(timeout=30.0)
+        self._own_client = client is None
         # Compatibility: the caller sets conn.row_factory — ignored here
         # because _TursoRow already provides dict-like access.
         self.row_factory: Any = None
@@ -216,7 +218,8 @@ class _TursoConnection:
         pass  # No transaction state to roll back
 
     def close(self) -> None:
-        self._client.close()
+        if self._own_client:
+            self._client.close()
 
 
 class QueueManager:
@@ -227,7 +230,7 @@ class QueueManager:
     /process-queue endpoint which invokes this.
     """
     
-    def __init__(self, db_path: str = "./forwardr.db", turso_url: str | None = None, turso_token: str | None = None):
+    def __init__(self, db_path: str = "./forwardr.db", turso_url: str | None = None, turso_token: str | None = None, client: Optional[httpx.AsyncClient] = None):
         """
         Initialize queue manager.
 
@@ -235,10 +238,12 @@ class QueueManager:
             db_path: Path to local SQLite database (used when Turso is not configured).
             turso_url: Turso/libSQL database URL  (``libsql://…``).
             turso_token: Turso auth token.
+            client: Optional shared httpx.AsyncClient for external requests.
         """
         self._lock = threading.Lock()
         self._turso_url = turso_url
         self._turso_token = turso_token
+        self._client = client
 
         if self._turso_url:
             # Turso mode — no local file needed
@@ -286,6 +291,8 @@ class QueueManager:
         ``execute / fetchone / fetchall`` interface.
         """
         if self._turso_url:
+            # Sync wrapper for Turso needs a sync client.
+            # We don't share the AsyncClient here because it's sync.
             conn = _TursoConnection(self._turso_url, self._turso_token)
         else:
             conn = sqlite3.connect(self.db_path, timeout=30.0)
@@ -751,11 +758,18 @@ class QueueManager:
         media_dir.mkdir(parents=True, exist_ok=True)
         local_path = media_dir / filename
 
+        if self._client:
+            # Re-download is sync, but we use an async client elsewhere.
+            # Cloudinary download is rare enough that a one-off client is okay
+            # if we don't have a sync one. But for consistency, let's stick to sync here.
+            pass
+
         with httpx.Client(timeout=60.0) as client:
-            resp = client.get(url)
-            resp.raise_for_status()
-            with open(local_path, 'wb') as f:
-                f.write(resp.content)
+            with client.stream("GET", url) as response:
+                response.raise_for_status()
+                with open(local_path, "wb") as f:
+                    for chunk in response.iter_bytes(chunk_size=8192):
+                        f.write(chunk)
 
         return str(local_path)
     
@@ -1187,6 +1201,7 @@ def _default_db_path() -> str:
 
 def get_queue_manager(
     db_path: str | None = None,
+    client: Optional[httpx.AsyncClient] = None,
 ) -> QueueManager:
     """Get or create queue manager singleton.
 
@@ -1206,10 +1221,11 @@ def get_queue_manager(
                 db_path=resolved,
                 turso_url=turso_url,
                 turso_token=turso_token,
+                client=client,
             )
         else:
             resolved_abs = str(Path(resolved).resolve())
             logger.info(f"Initialising QueueManager with local SQLite: {resolved} (resolved: {resolved_abs})")
-            _queue_manager = QueueManager(db_path=resolved)
+            _queue_manager = QueueManager(db_path=resolved, client=client)
 
     return _queue_manager

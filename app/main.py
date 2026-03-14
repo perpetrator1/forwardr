@@ -36,6 +36,7 @@ def _now_ist() -> datetime:
 	"""Return the current time in IST, timezone-naive for comparison."""
 	return datetime.now(IST).replace(tzinfo=None)
 
+_client: Optional[httpx.AsyncClient] = None
 _queue_manager = None
 
 
@@ -47,7 +48,7 @@ def _get_qm():
 	"""Get or initialise the queue manager singleton."""
 	global _queue_manager
 	if _queue_manager is None:
-		_queue_manager = get_queue_manager()
+		_queue_manager = get_queue_manager(client=_client)
 	return _queue_manager
 
 
@@ -73,12 +74,14 @@ async def _send_telegram_msg(bot_token: str, chat_id: str, text: str) -> None:
 		return
 	try:
 		url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-		async with httpx.AsyncClient() as client:
-			await client.post(url, json={
-				"chat_id": chat_id,
-				"text": text,
-				"parse_mode": "HTML",
-			}, timeout=10)
+		client = _client or httpx.AsyncClient()
+		await client.post(url, json={
+			"chat_id": chat_id,
+			"text": text,
+			"parse_mode": "HTML",
+		}, timeout=10)
+		if client is not _client:
+			await client.aclose()
 	except Exception as e:
 		logger.warning(f"Telegram notification failed: {e}")
 
@@ -97,13 +100,15 @@ async def _push_next_scheduled() -> None:
 	try:
 		qm = _get_qm()
 		next_scheduled = qm.get_next_scheduled_time()
-		async with httpx.AsyncClient() as client:
-			await client.post(
-				f"{cf_url}/update-schedule",
-				json={"next_scheduled": next_scheduled},
-				headers={"X-API-Key": api_key},
-				timeout=10,
-			)
+		client = _client or httpx.AsyncClient()
+		await client.post(
+			f"{cf_url}/update-schedule",
+			json={"next_scheduled": next_scheduled},
+			headers={"X-API-Key": api_key},
+			timeout=10,
+		)
+		if client is not _client:
+			await client.aclose()
 		logger.debug(f"Pushed next_scheduled={next_scheduled} to CF Worker KV")
 	except Exception as e:
 		logger.warning(f"Failed to push next_scheduled to CF Worker: {e}")
@@ -167,7 +172,7 @@ async def _process_webhook(update: Dict) -> None:
 			logger.info(f"Skipping bot command (handled by CF Worker): {text}")
 			return
 
-		handler = MediaHandler(bot_token, settings.core.media_path)
+		handler = MediaHandler(bot_token, settings.core.media_path, client=_client)
 		media_info = handler.parse_telegram_message(message)
 
 		if media_info.type != "text":
@@ -284,17 +289,19 @@ async def _trigger_pending_replay():
 		return
 	try:
 		retry_url = f"{cf_url}/retry"
-		async with httpx.AsyncClient() as client:
-			resp = await client.get(retry_url, timeout=15)
-			if resp.status_code == 200:
-				data = resp.json()
-				replayed = data.get("replayed", 0)
-				if replayed > 0:
-					logger.info(f"Startup replay: {replayed} pending update(s) recovered from CF Worker KV")
-				else:
-					logger.debug("Startup replay: no pending updates in CF Worker KV")
+		client = _client or httpx.AsyncClient()
+		resp = await client.get(retry_url, timeout=15)
+		if client is not _client:
+			await client.aclose()
+		if resp.status_code == 200:
+			data = resp.json()
+			replayed = data.get("replayed", 0)
+			if replayed > 0:
+				logger.info(f"Startup replay: {replayed} pending update(s) recovered from CF Worker KV")
 			else:
-				logger.warning(f"Startup /retry returned HTTP {resp.status_code}")
+				logger.debug("Startup replay: no pending updates in CF Worker KV")
+		else:
+			logger.warning(f"Startup /retry returned HTTP {resp.status_code}")
 	except Exception as e:
 		logger.debug(f"Startup /retry call failed (non-critical): {e}")
 
@@ -342,6 +349,8 @@ async def _queue_processing_loop():
 @asynccontextmanager
 async def _lifespan(application: FastAPI):
 	"""Startup / shutdown lifecycle."""
+	global _client
+	_client = httpx.AsyncClient(timeout=30.0)
 	_validate_config()
 	platforms_str = ', '.join(settings.enabled_platforms) if settings.enabled_platforms else 'NONE'
 	logger.info(f"Enabled platforms: {platforms_str}")
@@ -363,6 +372,8 @@ async def _lifespan(application: FastAPI):
 	# Shutdown: cancel the background tasks
 	task.cancel()
 	replay_task.cancel()
+	if _client:
+		await _client.aclose()
 	try:
 		await task
 	except asyncio.CancelledError:

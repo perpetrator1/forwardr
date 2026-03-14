@@ -51,17 +51,19 @@ class MediaInfo:
 class MediaHandler:
     """Handle media download, processing, and optimization"""
     
-    def __init__(self, bot_token: str, media_dir: str = "./media"):
+    def __init__(self, bot_token: str, media_dir: str = "./media", client: Optional[httpx.AsyncClient] = None):
         """
         Initialize media handler
         
         Args:
             bot_token: Telegram bot token for API calls
             media_dir: Directory to store downloaded media
+            client: Optional shared httpx.AsyncClient
         """
         self.bot_token = bot_token
         self.media_dir = Path(media_dir)
         self.media_dir.mkdir(parents=True, exist_ok=True)
+        self._client = client
         
         # Platform-specific limits
         self.platform_limits = {
@@ -170,55 +172,59 @@ class MediaHandler:
             logger.info("No media to download (text message)")
             return media_info
         
+        client = self._client or httpx.AsyncClient()
         try:
-            async with httpx.AsyncClient() as client:
-                # Step 1: Get file path from Telegram
-                file_info_url = f"https://api.telegram.org/bot{self.bot_token}/getFile"
-                params = {"file_id": media_info.file_id}
-                
-                response = await client.get(file_info_url, params=params)
+            # Step 1: Get file path from Telegram
+            file_info_url = f"https://api.telegram.org/bot{self.bot_token}/getFile"
+            params = {"file_id": media_info.file_id}
+            
+            response = await client.get(file_info_url, params=params)
+            response.raise_for_status()
+            file_data = response.json()
+            
+            if not file_data.get("ok"):
+                raise Exception(f"Telegram API error: {file_data.get('description')}")
+            
+            file_path = file_data["result"]["file_path"]
+            
+            # Step 2: Download the file (streaming)
+            download_url = f"https://api.telegram.org/file/bot{self.bot_token}/{file_path}"
+            
+            # Step 3: Determine file extension
+            ext = Path(file_path).suffix
+            if not ext and media_info.mime_type:
+                # Guess extension from mime type
+                mime_to_ext = {
+                    "image/jpeg": ".jpg",
+                    "image/png": ".png",
+                    "image/gif": ".gif",
+                    "image/webp": ".webp",
+                    "video/mp4": ".mp4",
+                    "video/mpeg": ".mpeg",
+                }
+                ext = mime_to_ext.get(media_info.mime_type, "")
+            
+            # Step 4: Save to local file using streaming to avoid loading into RAM
+            filename = f"{media_info.file_id}{ext}"
+            local_path = self.media_dir / filename
+            
+            async with client.stream("GET", download_url) as response:
                 response.raise_for_status()
-                file_data = response.json()
-                
-                if not file_data.get("ok"):
-                    raise Exception(f"Telegram API error: {file_data.get('description')}")
-                
-                file_path = file_data["result"]["file_path"]
-                
-                # Step 2: Download the file
-                download_url = f"https://api.telegram.org/file/bot{self.bot_token}/{file_path}"
-                response = await client.get(download_url)
-                response.raise_for_status()
-                
-                # Step 3: Determine file extension
-                ext = Path(file_path).suffix
-                if not ext and media_info.mime_type:
-                    # Guess extension from mime type
-                    mime_to_ext = {
-                        "image/jpeg": ".jpg",
-                        "image/png": ".png",
-                        "image/gif": ".gif",
-                        "image/webp": ".webp",
-                        "video/mp4": ".mp4",
-                        "video/mpeg": ".mpeg",
-                    }
-                    ext = mime_to_ext.get(media_info.mime_type, "")
-                
-                # Step 4: Save to local file
-                filename = f"{media_info.file_id}{ext}"
-                local_path = self.media_dir / filename
-                
                 with open(local_path, "wb") as f:
-                    f.write(response.content)
-                
-                media_info.local_path = str(local_path)
-                logger.info(f"Downloaded {media_info.type} to {local_path}")
-                
-                return media_info
+                    async for chunk in response.aiter_bytes(chunk_size=8192):
+                        f.write(chunk)
+            
+            media_info.local_path = str(local_path)
+            logger.info(f"Downloaded {media_info.type} to {local_path} (streaming)")
+            
+            return media_info
                 
         except Exception as e:
             logger.error(f"Failed to download media: {e}")
             raise
+        finally:
+            if client is not self._client:
+                await client.aclose()
     
     def cleanup_media(self, media_info: MediaInfo) -> bool:
         """
@@ -363,19 +369,21 @@ class MediaHandler:
             image = image.convert("RGB")
         
         while quality > 20:
-            buffer = io.BytesIO()
-            image.save(buffer, format="JPEG", quality=quality, optimize=True)
-            size = buffer.tell()
-            
-            if size <= max_bytes:
-                buffer.seek(0)
-                return buffer, quality
+            with io.BytesIO() as buffer:
+                image.save(buffer, format="JPEG", quality=quality, optimize=True)
+                size = buffer.tell()
+                
+                if size <= max_bytes:
+                    buffer.seek(0)
+                    return io.BytesIO(buffer.getvalue()), quality
             
             quality -= 5
         
         # If still too large, return best effort
-        buffer.seek(0)
-        return buffer, quality
+        final_buffer = io.BytesIO()
+        image.save(final_buffer, format="JPEG", quality=20, optimize=True)
+        final_buffer.seek(0)
+        return final_buffer, 20
     
     def get_media_variants(
         self, 
@@ -412,7 +420,7 @@ class MediaHandler:
         variants = {}
         
         try:
-            # Open original image
+            # Open original image - use a context manager to ensure it's closed
             with Image.open(original_path) as img:
                 # Convert to RGB if needed for processing
                 if img.mode not in ["RGB", "RGBA"]:
@@ -422,95 +430,90 @@ class MediaHandler:
                     limits = self.platform_limits.get(platform, self.platform_limits["default"])
                     
                     try:
-                        # Create platform-specific variant
-                        variant_img = img.copy()
-                        
                         # Special handling for Instagram (square crop option)
                         if platform == "instagram":
-                            # Create both regular and square variants
-                            # Regular variant (padded to valid Instagram ratio if needed)
-                            variant_img_regular = self._pad_to_aspect_ratio(
-                                img.copy(),
-                                "4:5"  # Typical portrait ratio
-                            )
-                            variant_img_regular = self._resize_image(
-                                variant_img_regular, 
-                                limits["max_dimension"],
-                                square_crop=False
-                            )
-                            buffer_regular, quality = self._optimize_image_size(
-                                variant_img_regular,
-                                limits["max_size_mb"]
-                            )
+                            # Process regular variant
+                            with img.copy() as variant_img_regular:
+                                variant_img_regular = self._pad_to_aspect_ratio(
+                                    variant_img_regular,
+                                    "4:5"
+                                )
+                                variant_img_regular = self._resize_image(
+                                    variant_img_regular, 
+                                    limits["max_dimension"],
+                                    square_crop=False
+                                )
+                                buffer_regular, quality = self._optimize_image_size(
+                                    variant_img_regular,
+                                    limits["max_size_mb"]
+                                )
+                                
+                                base_name = original_path.stem
+                                regular_path = self.media_dir / f"{base_name}_{platform}.jpg"
+                                with open(regular_path, "wb") as f:
+                                    f.write(buffer_regular.getbuffer())
+                                buffer_regular.close()
+                                
+                                variants[platform] = {
+                                    "path": str(regular_path),
+                                    "size_bytes": regular_path.stat().st_size,
+                                    "size_mb": round(regular_path.stat().st_size / (1024 * 1024), 2),
+                                    "dimensions": variant_img_regular.size,
+                                    "ratio": "4:5",
+                                    "quality": quality,
+                                }
                             
-                            # Square variant
-                            variant_img_square = self._resize_image(
-                                img.copy(),
-                                limits["max_dimension"],
-                                square_crop=True
-                            )
-                            buffer_square, quality_sq = self._optimize_image_size(
-                                variant_img_square,
-                                limits["max_size_mb"]
-                            )
-                            
-                            # Save both variants
-                            base_name = original_path.stem
-                            ext = ".jpg"
-                            
-                            regular_path = self.media_dir / f"{base_name}_{platform}{ext}"
-                            square_path = self.media_dir / f"{base_name}_{platform}_square{ext}"
-                            
-                            with open(regular_path, "wb") as f:
-                                f.write(buffer_regular.read())
-                            
-                            with open(square_path, "wb") as f:
-                                f.write(buffer_square.read())
-                            
-                            variants[platform] = {
-                                "path": str(regular_path),
-                                "size_bytes": regular_path.stat().st_size,
-                                "size_mb": round(regular_path.stat().st_size / 1024 / 1024, 2),
-                                "dimensions": variant_img_regular.size,
-                                "ratio": "4:5",
-                                "quality": quality,
-                            }
-                            
-                            variants[f"{platform}_square"] = {
-                                "path": str(square_path),
-                                "size_bytes": square_path.stat().st_size,
-                                "size_mb": round(square_path.stat().st_size / 1024 / 1024, 2),
-                                "dimensions": variant_img_square.size,
-                                "quality": quality_sq,
-                            }
+                            # Process square variant separately to keep RAM usage low
+                            with img.copy() as variant_img_square:
+                                variant_img_square = self._resize_image(
+                                    variant_img_square,
+                                    limits["max_dimension"],
+                                    square_crop=True
+                                )
+                                buffer_square, quality_sq = self._optimize_image_size(
+                                    variant_img_square,
+                                    limits["max_size_mb"]
+                                )
+                                
+                                square_path = self.media_dir / f"{base_name}_{platform}_square.jpg"
+                                with open(square_path, "wb") as f:
+                                    f.write(buffer_square.getbuffer())
+                                buffer_square.close()
+                                
+                                variants[f"{platform}_square"] = {
+                                    "path": str(square_path),
+                                    "size_bytes": square_path.stat().st_size,
+                                    "size_mb": round(square_path.stat().st_size / (1024 * 1024), 2),
+                                    "dimensions": variant_img_square.size,
+                                    "quality": quality_sq,
+                                }
                         else:
                             # Standard resize for other platforms
-                            variant_img = self._resize_image(
-                                variant_img,
-                                limits["max_dimension"],
-                                square_crop=False
-                            )
-                            
-                            buffer, quality = self._optimize_image_size(
-                                variant_img,
-                                limits["max_size_mb"]
-                            )
-                            
-                            # Save variant
-                            base_name = original_path.stem
-                            ext = ".jpg"
-                            variant_path = self.media_dir / f"{base_name}_{platform}{ext}"
-                            
-                            with open(variant_path, "wb") as f:
-                                f.write(buffer.read())
-                            
-                            variants[platform] = {
-                                "path": str(variant_path),
-                                "size_bytes": variant_path.stat().st_size,
-                                "size_mb": round(variant_path.stat().st_size / 1024 / 1024, 2),
-                                "dimensions": variant_img.size,
-                                "quality": quality,
-                            }
+                            with img.copy() as variant_img:
+                                variant_img = self._resize_image(
+                                    variant_img,
+                                    limits["max_dimension"],
+                                    square_crop=False
+                                )
+                                
+                                buffer, quality = self._optimize_image_size(
+                                    variant_img,
+                                    limits["max_size_mb"]
+                                )
+                                
+                                base_name = original_path.stem
+                                variant_path = self.media_dir / f"{base_name}_{platform}.jpg"
+                                with open(variant_path, "wb") as f:
+                                    f.write(buffer.getbuffer())
+                                buffer.close()
+                                
+                                variants[platform] = {
+                                    "path": str(variant_path),
+                                    "size_bytes": variant_path.stat().st_size,
+                                    "size_mb": round(variant_path.stat().st_size / (1024 * 1024), 2),
+                                    "dimensions": variant_img.size,
+                                    "quality": quality,
+                                }
                             
                         logger.info(f"Created {platform} variant: {variants.get(platform, {}).get('path')}")
                         
